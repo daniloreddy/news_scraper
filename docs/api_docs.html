@@ -84,6 +84,9 @@
 <main>
     <h2>Panoramica</h2>
     <p>Il microservizio espone endpoint REST per l'estrazione di notizie tramite Playwright. È ottimizzato per restituire testo pulito pronto per l'elaborazione da parte di modelli LLM.</p>
+    
+    <p><strong>Autenticazione:</strong> Se configurata nel file <code>.env</code> tramite <code>API_AUTH_TOKEN</code>, tutti gli endpoint di scraping (esclusa la rotta di health check) richiedono l'invio dell'header HTTP di autorizzazione Bearer:</p>
+    <pre><code>Authorization: Bearer INSERISCI_QUI_IL_TUO_TOKEN</code></pre>
 
     <h2>Endpoints</h2>
 

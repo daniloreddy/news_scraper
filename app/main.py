@@ -3,6 +3,7 @@ news-scraper — FastAPI microservice per scraping news da Diablo Immortal
 Invocabile da n8n via HTTP POST /scrape
 """
 
+import os
 import logging
 import asyncio
 import sys
@@ -13,9 +14,24 @@ if sys.platform == "win32":
 
 from contextlib import asynccontextmanager
 from typing import Optional
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Security, Depends, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from .scraper import scrape_latest_news, scrape_article
+
+security = HTTPBearer()
+API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN")
+
+def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+    """Verifica la validità del Bearer Token se impostato in ambiente."""
+    if API_AUTH_TOKEN:
+        if credentials.credentials != API_AUTH_TOKEN:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or missing API Auth Token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    return credentials.credentials
 
 
 @asynccontextmanager
@@ -70,7 +86,7 @@ async def health():
 
 
 @app.post("/scrape", response_model=list[ArticleResult])
-def scrape(req: ScrapeRequest):
+def scrape(req: ScrapeRequest, token: str = Depends(verify_token)):
     """
     Scrapa la pagina principale e restituisce le ultime N notizie
     (default: solo l'ultima). Il contenuto grezzo è pronto per
@@ -101,7 +117,7 @@ def scrape(req: ScrapeRequest):
 
 
 @app.post("/scrape/article", response_model=ArticleResult)
-def scrape_single(url: str):
+def scrape_single(url: str, token: str = Depends(verify_token)):
     """
     Scrapa un singolo articolo dato il suo URL.
     Utile per test o per riprocessare un articolo già noto.
