@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>news-scraper API Documentation</title>
+    <style>
+        :root {
+            --primary: #c41e3a; /* Diablo Red */
+            --dark: #121212;
+            --light: #e0e0e0;
+            --gray: #2c2c2c;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            line-height: 1.6;
+            color: var(--light);
+            background-color: var(--dark);
+            margin: 0;
+            padding: 0;
+        }
+        header {
+            background-color: var(--primary);
+            padding: 2rem 1rem;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        }
+        header h1 { margin: 0; font-size: 2.5rem; text-transform: uppercase; letter-spacing: 2px; }
+        header p { margin: 0.5rem 0 0; opacity: 0.9; }
+        
+        main { max-width: 900px; margin: 2rem auto; padding: 0 1.5rem; }
+        
+        .endpoint {
+            background-color: var(--gray);
+            border-radius: 8px;
+            margin-bottom: 2rem;
+            padding: 1.5rem;
+            border-left: 5px solid var(--primary);
+        }
+        .method {
+            display: inline-block;
+            padding: 0.3rem 0.8rem;
+            border-radius: 4px;
+            font-weight: bold;
+            text-transform: uppercase;
+            margin-right: 1rem;
+            background-color: #4caf50; /* Green for GET/POST */
+            color: white;
+        }
+        .method.post { background-color: #2196f3; } /* Blue for POST */
+        .url { font-family: 'Courier New', Courier, monospace; font-size: 1.1rem; }
+        
+        h2 { border-bottom: 1px solid #444; padding-bottom: 0.5rem; margin-top: 2rem; }
+        h3 { color: var(--primary); }
+        
+        pre {
+            background-color: #000;
+            padding: 1rem;
+            border-radius: 4px;
+            overflow-x: auto;
+            border: 1px solid #333;
+        }
+        code { font-family: 'Consolas', 'Monaco', monospace; color: #569cd6; }
+        
+        table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
+        th, td { text-align: left; padding: 0.8rem; border-bottom: 1px solid #444; }
+        th { color: var(--primary); }
+        
+        .badge {
+            background-color: #444;
+            padding: 0.2rem 0.5rem;
+            border-radius: 4px;
+            font-size: 0.85rem;
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>news-scraper API</h1>
+    <p>Documentazione specifica per l'integrazione n8n e scraping news</p>
+</header>
+
+<main>
+    <h2>Panoramica</h2>
+    <p>Il microservizio espone endpoint REST per l'estrazione di notizie tramite Playwright. È ottimizzato per restituire testo pulito pronto per l'elaborazione da parte di modelli LLM.</p>
+
+    <h2>Endpoints</h2>
+
+    <!-- GET /health -->
+    <div class="endpoint">
+        <h3><span class="method">GET</span> <span class="url">/health</span></h3>
+        <p>Verifica lo stato di salute del servizio.</p>
+        <h4>Risposta:</h4>
+        <pre><code>{
+  "status": "ok"
+}</code></pre>
+    </div>
+
+    <!-- POST /scrape -->
+    <div class="endpoint">
+        <h3><span class="method post">POST</span> <span class="url">/scrape</span></h3>
+        <p>Scansiona una pagina indice (es. Diablo Immortal News) ed estrae le ultime N notizie.</p>
+        
+        <h4>Body (JSON):</h4>
+        <table>
+            <tr>
+                <th>Campo</th>
+                <th>Tipo</th>
+                <th>Default</th>
+                <th>Descrizione</th>
+            </tr>
+            <tr>
+                <td><code>url</code></td>
+                <td>String</td>
+                <td><small>diabloimmortal.blizzard.com...</small></td>
+                <td>URL della pagina news da scansionare.</td>
+            </tr>
+            <tr>
+                <td><code>max_articles</code></td>
+                <td>Integer</td>
+                <td><code>1</code></td>
+                <td>Numero massimo di articoli da estrarre e processare.</td>
+            </tr>
+        </table>
+
+        <h4>Esempio richiesta:</h4>
+        <pre><code>{
+  "max_articles": 3
+}</code></pre>
+
+        <h4>Risposta (Array di oggetti):</h4>
+        <pre><code>[
+  {
+    "title": "Titolo Notizia",
+    "url": "https://news.blizzard.com/...",
+    "published_date": "10 giugno 2026",
+    "content": "Testo estratto dell'articolo...",
+    "thumbnail_url": "https://..."
+  }
+]</code></pre>
+    </div>
+
+    <!-- POST /scrape/article -->
+    <div class="endpoint">
+        <h3><span class="method post">POST</span> <span class="url">/scrape/article</span></h3>
+        <p>Estrae i dati da un singolo URL specifico di un articolo.</p>
+        
+        <h4>Query Parameters:</h4>
+        <table>
+            <tr>
+                <th>Parametro</th>
+                <th>Tipo</th>
+                <th>Obbligatorio</th>
+                <th>Descrizione</th>
+            </tr>
+            <tr>
+                <td><code>url</code></td>
+                <td>String</td>
+                <td>Sì</td>
+                <td>URL completo dell'articolo da scrapare.</td>
+            </tr>
+        </table>
+
+        <h4>Risposta:</h4>
+        <p>Restituisce un singolo oggetto articolo (stessa struttura della lista sopra).</p>
+    </div>
+
+    <h2>Dettagli Tecnici</h2>
+    <ul>
+        <li><strong>Smart Scraping:</strong> Il servizio non utilizza fragili selettori CSS/Regex. Converte la pagina in Markdown tramite <code>MarkItDown</code> di Microsoft e delega l'identificazione strutturale dei link all'LLM (OpenAI API compatibile).</li>
+        <li><strong>Universalità dei Link:</strong> Include un motore di pre-processing che normalizza i Custom Web Components con attributi <code>href</code> (es. <code>&lt;blz-button&gt;</code>) in tag <code>&lt;a&gt;</code> standard e risolve gli URL relativi in assoluti prima della conversione.</li>
+        <li><strong>Formato Data:</strong> Le date ISO vengono convertite in formato testuale italiano (es. <em>"10 giugno 2026"</em>) o estratte direttamente dall'LLM se non reperibili nei metadati.</li>
+        <li><strong>Limiti Contenuto:</strong> Il campo <code>content</code> è limitato a 8000 caratteri per evitare overflow nei prompt LLM di n8n.</li>
+        <li><strong>Tecnologia:</strong> Basato su Playwright (Chromium) per gestire contenuti caricati dinamicamente via JavaScript, integrato con l'auto-installazione del browser all'avvio.</li>
+    </ul>
+</main>
+
+</body>
+</html>

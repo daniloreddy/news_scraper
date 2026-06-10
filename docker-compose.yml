@@ -1,0 +1,11 @@
+services:
+  news-scraper:
+    build: .
+    container_name: news-scraper
+    restart: unless-stopped
+    ports:
+      - "8088:8000"       # porta esterna → interna; cambia 8088 se occupata
+    environment:
+      - PYTHONUNBUFFERED=1
+    # Playwright ha bisogno di /dev/shm abbastanza grande
+    shm_size: "512m"
