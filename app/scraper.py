@@ -23,12 +23,18 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 
 # Configurazione LLM
-LLM_BASE_URL = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
-LLM_API_KEY = os.getenv("LLM_API_KEY", "")
-LLM_MODEL = os.getenv("LLM_MODEL", "gpt-4o-mini")
-LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
-LLM_TIMEOUT = float(os.getenv("LLM_TIMEOUT", "60.0"))
-DEBUG = os.getenv("DEBUG", "false").lower() == "true"
+LLM_BASE_URL = os.getenv("LLM_BASE_URL") or "https://api.openai.com/v1"
+LLM_API_KEY = os.getenv("LLM_API_KEY") or ""
+LLM_MODEL = os.getenv("LLM_MODEL") or "gpt-4o-mini"
+
+temp_val = os.getenv("LLM_TEMPERATURE")
+LLM_TEMPERATURE = float(temp_val) if temp_val and temp_val.strip() else 0.1
+
+timeout_val = os.getenv("LLM_TIMEOUT")
+LLM_TIMEOUT = float(timeout_val) if timeout_val and timeout_val.strip() else 60.0
+
+debug_val = os.getenv("DEBUG")
+DEBUG = debug_val.lower() == "true" if debug_val else False
 
 # Inizializza client OpenAI asincrono con custom default headers
 llm_client = AsyncOpenAI(
