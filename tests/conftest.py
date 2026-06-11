@@ -11,7 +11,10 @@ os.environ.setdefault("LLM_API_KEY", "test-dummy")
 def client():
     from app.main import app
 
-    # Prevent lifespan from actually running `playwright install`
+    # Prevent lifespan from actually running `playwright install`.
+    # Patch API_AUTH_TOKEN to None so local .env values don't bleed into
+    # non-auth tests; auth-specific tests patch it themselves per test.
     with patch("subprocess.run"):
-        with TestClient(app) as c:
-            yield c
+        with patch("app.main.API_AUTH_TOKEN", None):
+            with TestClient(app) as c:
+                yield c

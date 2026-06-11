@@ -123,7 +123,7 @@
                 <td><code>max_articles</code></td>
                 <td>Integer</td>
                 <td><code>1</code></td>
-                <td>Numero massimo di articoli da estrarre e processare.</td>
+                <td>Numero massimo di articoli da estrarre e processare. Valore accettato: 1–10.</td>
             </tr>
         </table>
 
@@ -148,11 +148,11 @@
     <div class="endpoint">
         <h3><span class="method post">POST</span> <span class="url">/scrape/article</span> <span class="badge" style="background-color: var(--primary); color: white;">Token</span></h3>
         <p>Estrae i dati da un singolo URL specifico di un articolo.</p>
-        
-        <h4>Query Parameters:</h4>
+
+        <h4>Body (JSON):</h4>
         <table>
             <tr>
-                <th>Parametro</th>
+                <th>Campo</th>
                 <th>Tipo</th>
                 <th>Obbligatorio</th>
                 <th>Descrizione</th>
@@ -165,16 +165,30 @@
             </tr>
         </table>
 
+        <h4>Esempio richiesta:</h4>
+        <pre><code>{
+  "url": "https://diabloimmortal.blizzard.com/en-us/news/article/..."
+}</code></pre>
+
         <h4>Risposta:</h4>
-        <p>Restituisce un singolo oggetto articolo (stessa struttura della lista sopra).</p>
+        <pre><code>{
+  "title": "Titolo Articolo",
+  "url": "https://diabloimmortal.blizzard.com/en-us/news/article/...",
+  "published_date": null,
+  "content": "Testo estratto dell'articolo...",
+  "thumbnail_url": "https://..."
+}</code></pre>
     </div>
 
     <h2>Dettagli Tecnici</h2>
     <ul>
         <li><strong>Smart Scraping:</strong> Il servizio non utilizza fragili selettori CSS/Regex. Converte la pagina in Markdown tramite <code>MarkItDown</code> di Microsoft e delega l'identificazione strutturale dei link all'LLM (OpenAI API compatibile).</li>
         <li><strong>Universalità dei Link:</strong> Include un motore di pre-processing che normalizza i Custom Web Components con attributi <code>href</code> (es. <code>&lt;blz-button&gt;</code>) in tag <code>&lt;a&gt;</code> standard e risolve gli URL relativi in assoluti prima della conversione.</li>
-        <li><strong>Formato Data:</strong> Le date ISO vengono convertite in formato testuale italiano (es. <em>"10 giugno 2026"</em>) o estratte direttamente dall'LLM se non reperibili nei metadati.</li>
+        <li><strong>Formato Data:</strong> Il campo <code>published_date</code> viene estratto dall'LLM durante lo scraping della pagina indice (<code>/scrape</code>). Per lo scraping di singoli articoli (<code>/scrape/article</code>) il campo è sempre <code>null</code>, non essendo disponibile nei metadati della pagina.</li>
         <li><strong>Limiti Contenuto:</strong> Il campo <code>content</code> è limitato a 8000 caratteri per evitare overflow nei prompt LLM di n8n.</li>
+        <li><strong>Timeout:</strong> Il tempo massimo per ogni operazione di scraping è configurabile tramite la variabile d'ambiente <code>SCRAPE_TIMEOUT</code> (default: 300 secondi). Al superamento del timeout l'endpoint risponde con HTTP 504.</li>
+        <li><strong>Rate limiting:</strong> Gli endpoint di scraping sono soggetti a un limite per IP configurabile tramite <code>RATE_LIMIT</code> (default: <code>20/minute</code>). Al superamento del limite la risposta è HTTP 429. Il servizio riconosce gli header Cloudflare (<code>CF-Connecting-IP</code>) per identificare correttamente il client reale.</li>
+        <li><strong>Validazione URL:</strong> I campi <code>url</code> accettano solo schemi <code>http</code> e <code>https</code>. URL che puntano a indirizzi IP privati, loopback o localhost vengono rifiutati con HTTP 422.</li>
         <li><strong>Tecnologia:</strong> Basato su Playwright (Chromium) per gestire contenuti caricati dinamicamente via JavaScript, integrato con l'auto-installazione del browser all'avvio.</li>
     </ul>
 </main>

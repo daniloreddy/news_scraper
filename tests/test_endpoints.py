@@ -157,6 +157,45 @@ class TestScrapeArticleEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# URL validation (SSRF) and input constraints
+# ---------------------------------------------------------------------------
+
+
+class TestInputValidation:
+    def test_scrape_file_url_returns_422(self, client):
+        response = client.post("/scrape", json={"url": "file:///etc/passwd"})
+        assert response.status_code == 422
+
+    def test_scrape_private_ip_returns_422(self, client):
+        response = client.post("/scrape", json={"url": "http://192.168.1.1/"})
+        assert response.status_code == 422
+
+    def test_scrape_localhost_returns_422(self, client):
+        response = client.post("/scrape", json={"url": "http://localhost/admin"})
+        assert response.status_code == 422
+
+    def test_scrape_article_file_url_returns_422(self, client):
+        response = client.post("/scrape/article", json={"url": "file:///etc/passwd"})
+        assert response.status_code == 422
+
+    def test_scrape_article_private_ip_returns_422(self, client):
+        response = client.post("/scrape/article", json={"url": "http://10.0.0.1/"})
+        assert response.status_code == 422
+
+    def test_max_articles_above_limit_returns_422(self, client):
+        response = client.post(
+            "/scrape", json={"url": "https://example.com", "max_articles": 11}
+        )
+        assert response.status_code == 422
+
+    def test_max_articles_zero_returns_422(self, client):
+        response = client.post(
+            "/scrape", json={"url": "https://example.com", "max_articles": 0}
+        )
+        assert response.status_code == 422
+
+
+# ---------------------------------------------------------------------------
 # Authentication
 # ---------------------------------------------------------------------------
 

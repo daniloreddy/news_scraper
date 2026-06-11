@@ -7,7 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from unittest.mock import patch
 
 from app.scraper import _preprocess_html, ArticlesList
-from app.main import verify_token
+from app.main import verify_token, _validate_url, ScrapeRequest, ArticleRequest
 
 
 # ---------------------------------------------------------------------------
@@ -169,3 +169,94 @@ class TestArticlesListModel:
         assert dumped["url"] == "https://example.com"
         assert dumped["published_date"] == "2026-01-01"
         assert dumped["thumbnail_url"] is None
+
+
+# ---------------------------------------------------------------------------
+# _validate_url (SSRF guard)
+# ---------------------------------------------------------------------------
+
+
+class TestValidateUrl:
+    def test_https_url_allowed(self):
+        assert _validate_url("https://example.com/news") == "https://example.com/news"
+
+    def test_http_url_allowed(self):
+        assert _validate_url("http://example.com/news") == "http://example.com/news"
+
+    def test_file_scheme_rejected(self):
+        with pytest.raises(ValueError, match="http or https"):
+            _validate_url("file:///etc/passwd")
+
+    def test_data_scheme_rejected(self):
+        with pytest.raises(ValueError, match="http or https"):
+            _validate_url("data:text/html,<script>alert(1)</script>")
+
+    def test_localhost_rejected(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_url("http://localhost/admin")
+
+    def test_loopback_ip_rejected(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_url("http://127.0.0.1/secret")
+
+    def test_private_class_c_rejected(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_url("http://192.168.1.100/")
+
+    def test_private_class_a_rejected(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            _validate_url("http://10.0.0.1/")
+
+    def test_empty_host_rejected(self):
+        with pytest.raises(ValueError):
+            _validate_url("https:///path")
+
+
+# ---------------------------------------------------------------------------
+# ScrapeRequest / ArticleRequest model validation
+# ---------------------------------------------------------------------------
+
+
+class TestScrapeRequestModel:
+    def test_default_url_and_max_articles(self):
+        req = ScrapeRequest()
+        assert req.max_articles == 1
+        assert "diabloimmortal" in req.url
+
+    def test_max_articles_10_allowed(self):
+        req = ScrapeRequest(url="https://example.com", max_articles=10)
+        assert req.max_articles == 10
+
+    def test_max_articles_0_rejected(self):
+        with pytest.raises(ValidationError):
+            ScrapeRequest(url="https://example.com", max_articles=0)
+
+    def test_max_articles_11_rejected(self):
+        with pytest.raises(ValidationError):
+            ScrapeRequest(url="https://example.com", max_articles=11)
+
+    def test_ssrf_file_url_rejected(self):
+        with pytest.raises(ValidationError):
+            ScrapeRequest(url="file:///etc/passwd")
+
+    def test_ssrf_private_ip_rejected(self):
+        with pytest.raises(ValidationError):
+            ScrapeRequest(url="http://192.168.1.100/")
+
+    def test_ssrf_localhost_rejected(self):
+        with pytest.raises(ValidationError):
+            ScrapeRequest(url="http://localhost/admin")
+
+
+class TestArticleRequestModel:
+    def test_valid_url_accepted(self):
+        req = ArticleRequest(url="https://example.com/article/1")
+        assert req.url == "https://example.com/article/1"
+
+    def test_ssrf_file_url_rejected(self):
+        with pytest.raises(ValidationError):
+            ArticleRequest(url="file:///etc/passwd")
+
+    def test_ssrf_private_ip_rejected(self):
+        with pytest.raises(ValidationError):
+            ArticleRequest(url="http://10.0.0.1/")
