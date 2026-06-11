@@ -4,5 +4,5 @@ playwright==1.44.0
 pydantic==2.7.1
 markitdown==0.1.6
 openai>=1.56.0
-python-dotenv==1.0.1
+python-dotenv==1.2.2
 slowapi==0.1.9
