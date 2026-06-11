@@ -14,24 +14,31 @@ if sys.platform == "win32":
 
 from contextlib import asynccontextmanager
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Security, Depends, status
+from fastapi import FastAPI, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from .scraper import scrape_latest_news, scrape_article
 
-security = HTTPBearer()
-API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN")
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)):
+security = HTTPBearer(auto_error=False)
+API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN")
+SCRAPE_TIMEOUT = float(os.getenv("SCRAPE_TIMEOUT", "300"))
+
+
+def verify_token(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
+) -> Optional[str]:
     """Verifica la validità del Bearer Token se impostato in ambiente."""
     if API_AUTH_TOKEN:
-        if credentials.credentials != API_AUTH_TOKEN:
+        if credentials is None or credentials.credentials != API_AUTH_TOKEN:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or missing API Auth Token",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-    return credentials.credentials
+    return credentials.credentials if credentials else None
 
 
 @asynccontextmanager
@@ -55,9 +62,6 @@ async def lifespan(app: FastAPI):
     yield
 
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
 app = FastAPI(
     title="news-scraper",
     description="Scraping news Diablo Immortal per n8n",
@@ -80,13 +84,17 @@ class ArticleResult(BaseModel):
     thumbnail_url: Optional[str]
 
 
+class ArticleRequest(BaseModel):
+    url: str
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 
 @app.post("/scrape", response_model=list[ArticleResult])
-def scrape(req: ScrapeRequest, token: str = Depends(verify_token)):
+def scrape(req: ScrapeRequest, token: Optional[str] = Depends(verify_token)):
     """
     Scrapa la pagina principale e restituisce le ultime N notizie
     (default: solo l'ultima). Il contenuto grezzo è pronto per
@@ -102,13 +110,17 @@ def scrape(req: ScrapeRequest, token: str = Depends(verify_token)):
 
     try:
         articles = loop.run_until_complete(
-            scrape_latest_news(req.url, req.max_articles)
+            asyncio.wait_for(
+                scrape_latest_news(req.url, req.max_articles), timeout=SCRAPE_TIMEOUT
+            )
         )
         if not articles:
             raise HTTPException(status_code=404, detail="Nessuna news trovata")
         return articles
     except HTTPException:
         raise
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Scraping timeout")
     except Exception as e:
         logger.error(f"Errore scraping: {e}")
         raise HTTPException(status_code=500, detail=str(e)) from e
@@ -117,7 +129,7 @@ def scrape(req: ScrapeRequest, token: str = Depends(verify_token)):
 
 
 @app.post("/scrape/article", response_model=ArticleResult)
-def scrape_single(url: str, token: str = Depends(verify_token)):
+def scrape_single(req: ArticleRequest, token: Optional[str] = Depends(verify_token)):
     """
     Scrapa un singolo articolo dato il suo URL.
     Utile per test o per riprocessare un articolo già noto.
@@ -128,7 +140,11 @@ def scrape_single(url: str, token: str = Depends(verify_token)):
     asyncio.set_event_loop(loop)
 
     try:
-        return loop.run_until_complete(scrape_article(url))
+        return loop.run_until_complete(
+            asyncio.wait_for(scrape_article(req.url), timeout=SCRAPE_TIMEOUT)
+        )
+    except asyncio.TimeoutError:
+        raise HTTPException(status_code=504, detail="Scraping timeout")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e)) from e
     finally:

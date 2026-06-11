@@ -8,7 +8,7 @@ import os
 import re
 import json
 import logging
-from datetime import datetime
+import tempfile
 from typing import Optional, List
 from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, Page
@@ -44,7 +44,7 @@ llm_client = AsyncOpenAI(
     default_headers={
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
         "Accept": "application/json",
-    }
+    },
 )
 
 # Inizializza MarkItDown
@@ -68,24 +68,25 @@ def _save_debug_file(filename: str, content: str):
 def _preprocess_html(html_content: str, base_url: str) -> str:
     """Pre-elabora l'HTML convertendo i tag custom con href in tag <a> standard e rendendo gli URL assoluti."""
     from urllib.parse import urlparse
+
     try:
         soup = BeautifulSoup(html_content, "html.parser")
         parsed_base = urlparse(base_url)
         base_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
 
-        for tag in soup.find_all(lambda t: t.has_attr('href')):
-            href = str(tag['href']).strip()
+        for tag in soup.find_all(lambda t: t.has_attr("href")):
+            href = str(tag["href"]).strip()
             # Rendi l'URL assoluto se è relativo
-            if href.startswith('/'):
+            if href.startswith("/"):
                 href = f"{base_origin}{href}"
-            tag['href'] = href
+            tag["href"] = href
 
             # Se non è un tag 'a', lo convertiamo in 'a'
-            if tag.name != 'a':
+            if tag.name != "a":
                 new_tag = soup.new_tag("a", href=href)
                 new_tag.extend(tag.contents)
                 tag.replace_with(new_tag)
-                
+
         return str(soup)
     except Exception as e:
         logger.warning(f"Errore durante il preprocessing HTML: {e}")
@@ -94,19 +95,31 @@ def _preprocess_html(html_content: str, base_url: str) -> str:
 
 class ArticleExtraction(BaseModel):
     title: str = Field(description="Titolo della notizia o dell'articolo.")
-    url: str = Field(description="URL assoluto completo che porta all'articolo. Se è un path relativo, convertilo in assoluto.")
-    published_date: Optional[str] = Field(description="Data di pubblicazione estratta, possibilmente in formato stringa leggibile.", default=None)
-    thumbnail_url: Optional[str] = Field(description="URL dell'immagine di copertina, se presente.", default=None)
+    url: str = Field(
+        description="URL assoluto completo che porta all'articolo. Se è un path relativo, convertilo in assoluto."
+    )
+    published_date: Optional[str] = Field(
+        description="Data di pubblicazione estratta, possibilmente in formato stringa leggibile.",
+        default=None,
+    )
+    thumbnail_url: Optional[str] = Field(
+        description="URL dell'immagine di copertina, se presente.", default=None
+    )
+
 
 class ArticlesList(BaseModel):
     articles: List[ArticleExtraction]
 
 
-async def _extract_articles_with_llm(markdown_text: str, base_url: str, max_articles: int) -> List[dict]:
+async def _extract_articles_with_llm(
+    markdown_text: str, base_url: str, max_articles: int
+) -> List[dict]:
     """Usa l'LLM per estrarre la lista di articoli dal Markdown."""
     if not LLM_API_KEY:
-        logger.warning("LLM_API_KEY non impostata. L'estrazione potrebbe fallire se il server richiede autenticazione.")
-        
+        logger.warning(
+            "LLM_API_KEY non impostata. L'estrazione potrebbe fallire se il server richiede autenticazione."
+        )
+
     prompt = f"""
     Analizza il seguente contenuto Markdown estratto da una pagina web ({base_url}).
     Il tuo compito è trovare i link che puntano agli articoli di notizie (news).
@@ -121,34 +134,40 @@ async def _extract_articles_with_llm(markdown_text: str, base_url: str, max_arti
     Rispondi SOLO con i dati richiesti.
     
     Contenuto Markdown:
-    {markdown_text[:15000]}  # Tronchiamo per evitare problemi di token
+    {markdown_text[:15000]}
     """
 
     try:
-        logger.info(f"Invocazione LLM ({LLM_MODEL}) per estrazione di {max_articles} articoli...")
-        
+        logger.info(
+            f"Invocazione LLM ({LLM_MODEL}) per estrazione di {max_articles} articoli..."
+        )
+
         # Usiamo la chiamata standard per massima compatibilità con server LLM locali/custom
         response = await llm_client.chat.completions.create(
             model=LLM_MODEL,
             messages=[
-                {"role": "system", "content": "Sei un assistente specializzato nell'estrazione di dati strutturati da pagine web Markdown. Rispondi SEMPRE e SOLO con un oggetto JSON valido."},
-                {"role": "user", "content": prompt + "\n\nRispondi con un JSON che abbia questa struttura: {\"articles\": [{\"title\": \"...\", \"url\": \"...\", \"published_date\": \"...\", \"thumbnail_url\": \"...\"}]}"}
+                {
+                    "role": "system",
+                    "content": "Sei un assistente specializzato nell'estrazione di dati strutturati da pagine web Markdown. Rispondi SEMPRE e SOLO con un oggetto JSON valido.",
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                    + '\n\nRispondi con un JSON che abbia questa struttura: {"articles": [{"title": "...", "url": "...", "published_date": "...", "thumbnail_url": "..."}]}',
+                },
             ],
             response_format={"type": "json_object"},
             temperature=LLM_TEMPERATURE,
         )
-        
+
         content = response.choices[0].message.content
         if not content:
             return []
-            
+
         _save_debug_file("llm_output.json", content)
-        
-        data = json.loads(content)
-        articles = data.get("articles", [])
-        
-        # Validazione minima
-        return articles[:max_articles]
+
+        parsed = ArticlesList.model_validate(json.loads(content))
+        return [a.model_dump() for a in parsed.articles[:max_articles]]
 
     except Exception as e:
         logger.error(f"Errore durante l'estrazione LLM: {e}")
@@ -179,28 +198,29 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> list[dict]:
             # Estrai HTML e converti
             html_content = await page.content()
             _save_debug_file("playwright_output.html", html_content)
-            
+
             # Pre-processamento per normalizzare i tag e gli URL
             preprocessed_html = _preprocess_html(html_content, url)
             _save_debug_file("playwright_preprocessed.html", preprocessed_html)
-            
-            # Usiamo markitdown salvando temporaneamente l'html
-            # (MarkItDown predilige i file locali o le response object, qui creiamo un file temp)
-            temp_file = "temp_index.html"
-            with open(temp_file, "w", encoding="utf-8") as f:
-                f.write(preprocessed_html)
-                
+
             logger.info("Conversione HTML -> Markdown")
-            md_result = md_converter.convert(temp_file)
-            markdown_text = md_result.text_content
-            _save_debug_file("markitdown_output.md", markdown_text)
-            
-            # Pulisci file temporaneo
-            if os.path.exists(temp_file):
-                os.remove(temp_file)
+            with tempfile.NamedTemporaryFile(
+                suffix=".html", delete=False, mode="w", encoding="utf-8"
+            ) as tmp:
+                temp_file = tmp.name
+                tmp.write(preprocessed_html)
+            try:
+                md_result = md_converter.convert(temp_file)
+                markdown_text = md_result.text_content
+                _save_debug_file("markitdown_output.md", markdown_text)
+            finally:
+                if os.path.exists(temp_file):
+                    os.remove(temp_file)
 
             # Estrai info base con LLM
-            articles_meta = await _extract_articles_with_llm(markdown_text, url, max_articles)
+            articles_meta = await _extract_articles_with_llm(
+                markdown_text, url, max_articles
+            )
             logger.info(f"L'LLM ha estratto {len(articles_meta)} link ad articoli.")
 
             results = []
@@ -208,18 +228,24 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> list[dict]:
                 try:
                     # Vai a prendere il contenuto completo dell'articolo
                     article_data = await _scrape_article_page(page, meta["url"])
-                    
+
                     # Merge dei dati: se l'LLM ha trovato una thumbnail o data migliore, tienila,
                     # altrimenti usa quella presa dalla pagina specifica.
                     article_data["title"] = meta.get("title") or article_data["title"]
-                    if not article_data.get("published_date") and meta.get("published_date"):
+                    if not article_data.get("published_date") and meta.get(
+                        "published_date"
+                    ):
                         article_data["published_date"] = meta["published_date"]
-                    if not article_data.get("thumbnail_url") and meta.get("thumbnail_url"):
+                    if not article_data.get("thumbnail_url") and meta.get(
+                        "thumbnail_url"
+                    ):
                         article_data["thumbnail_url"] = meta["thumbnail_url"]
-                        
+
                     results.append(article_data)
                 except Exception as e:
-                    logger.warning(f"Errore nello scraping del singolo articolo {meta['url']}: {e}")
+                    logger.warning(
+                        f"Errore nello scraping del singolo articolo {meta['url']}: {e}"
+                    )
 
             return results
 
@@ -231,7 +257,13 @@ async def scrape_article(url: str) -> dict:
     """Entry point per scrapare un singolo articolo (usato dall'endpoint /scrape/article)."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
-        page = await browser.new_page()
+        context = await browser.new_context(
+            user_agent=(
+                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
+        )
+        page = await context.new_page()
         try:
             return await _scrape_article_page(page, url)
         finally:
@@ -249,21 +281,22 @@ async def _scrape_article_page(page: Page, url: str) -> dict:
 
     # Estrai HTML e converti
     html_content = await page.content()
-    
-    # MarkItDown conversion
-    temp_file = "temp_article.html"
-    with open(temp_file, "w", encoding="utf-8") as f:
-        f.write(html_content)
-        
-    md_result = md_converter.convert(temp_file)
-    markdown_text = md_result.text_content
-    
-    if os.path.exists(temp_file):
-        os.remove(temp_file)
+
+    with tempfile.NamedTemporaryFile(
+        suffix=".html", delete=False, mode="w", encoding="utf-8"
+    ) as tmp:
+        temp_file = tmp.name
+        tmp.write(html_content)
+    try:
+        md_result = md_converter.convert(temp_file)
+        markdown_text = md_result.text_content
+    finally:
+        if os.path.exists(temp_file):
+            os.remove(temp_file)
 
     # Pulisci whitespace multipli
-    content = re.sub(r'\n{3,}', '\n\n', markdown_text)
-    
+    content = re.sub(r"\n{3,}", "\n\n", markdown_text)
+
     # Raccogli metadati basici rimasti nella pagina
     title = await page.title()
     thumbnail_url = await page.evaluate("""() => {
@@ -271,26 +304,14 @@ async def _scrape_article_page(page: Page, url: str) -> dict:
         return og ? og.getAttribute('content') : null;
     }""")
 
+    if len(content) > 8000:
+        logger.warning(
+            f"Contenuto articolo troncato a 8000 chars (originale: {len(content)})"
+        )
     return {
-        "title": title.split('—')[0].strip() if '—' in title else title.strip(),
+        "title": title.split("—")[0].strip() if "—" in title else title.strip(),
         "url": url,
-        "published_date": None, # Verrà sovrascritta da _extract_articles_with_llm se disponibile
-        "content": content[:8000],  # Limite ragionevole per LLM n8n
+        "published_date": None,
+        "content": content[:8000],
         "thumbnail_url": thumbnail_url,
     }
-
-
-def _format_date(raw: Optional[str]) -> Optional[str]:
-    """Converte data ISO o testuale in formato leggibile."""
-    if not raw:
-        return None
-    try:
-        # ISO 8601: 2026-03-18T10:00:00Z
-        dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-        mesi = [
-            "", "gennaio", "febbraio", "marzo", "aprile", "maggio", "giugno",
-            "luglio", "agosto", "settembre", "ottobre", "novembre", "dicembre"
-        ]
-        return f"{dt.day} {mesi[dt.month]} {dt.year}"
-    except Exception:
-        return raw  # Restituisce as-is se non parsabile
