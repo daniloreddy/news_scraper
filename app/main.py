@@ -38,13 +38,13 @@ BROWSER_SEMAPHORE = threading.Semaphore(3)
 
 
 def get_client_ip(request: Request) -> str:
-    cf_ip = request.headers.get("CF-Connecting-IP")        # Cloudflare
+    cf_ip = request.headers.get("CF-Connecting-IP")  # Cloudflare
     if cf_ip:
         return cf_ip
-    real_ip = request.headers.get("X-Real-IP")             # nginx
+    real_ip = request.headers.get("X-Real-IP")  # nginx
     if real_ip:
         return real_ip
-    forwarded_for = request.headers.get("X-Forwarded-For") # Apache / nginx
+    forwarded_for = request.headers.get("X-Forwarded-For")  # Apache / nginx
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
@@ -84,7 +84,12 @@ def _validate_url(v: str) -> str:
     except ValueError:
         pass  # domain name, not an IP address — allowed
     else:
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
+        if (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+        ):
             raise ValueError("URL hostname not allowed")
     return v
 
@@ -120,7 +125,7 @@ app = FastAPI(
     openapi_url=None,
 )
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 
 class ScrapeRequest(BaseModel):
@@ -151,7 +156,8 @@ class ArticleRequest(BaseModel):
 
 
 @app.get("/health")
-async def health():
+@limiter.limit("100/minute")
+async def health(request: Request):
     return {"status": "ok"}
 
 
@@ -170,15 +176,14 @@ def scrape(
     logger.info(f"Scraping: {req.url} (max {req.max_articles})")
 
     with BROWSER_SEMAPHORE:
-        if sys.platform == "win32":
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         try:
             articles = loop.run_until_complete(
                 asyncio.wait_for(
-                    scrape_latest_news(req.url, req.max_articles), timeout=SCRAPE_TIMEOUT
+                    scrape_latest_news(req.url, req.max_articles),
+                    timeout=SCRAPE_TIMEOUT,
                 )
             )
             if not articles:
@@ -207,8 +212,6 @@ def scrape_single(
     Utile per test o per riprocessare un articolo già noto.
     """
     with BROWSER_SEMAPHORE:
-        if sys.platform == "win32":
-            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 

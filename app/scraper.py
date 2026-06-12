@@ -16,6 +16,7 @@ from markitdown import MarkItDown
 from pydantic import BaseModel, Field
 from openai import AsyncOpenAI
 from dotenv import load_dotenv
+from tenacity import retry, stop_after_attempt, wait_exponential
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,19 @@ llm_client = AsyncOpenAI(
 
 # Inizializza MarkItDown
 md_converter = MarkItDown()
+
+
+def _sanitize_markdown(text: str) -> str:
+    """Rimuove artefatti HTML residui dal Markdown per ridurre la superficie di prompt injection."""
+    text = re.sub(
+        r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE
+    )
+    text = re.sub(
+        r"<iframe[^>]*>.*?</iframe>", "", text, flags=re.DOTALL | re.IGNORECASE
+    )
+    text = re.sub(r"data:[^;]+;base64,[A-Za-z0-9+/=]+", "[DATA_URI_REMOVED]", text)
+    text = re.sub(r"javascript:", "", text, flags=re.IGNORECASE)
+    return text
 
 
 def _save_debug_file(filename: str, content: str):
@@ -111,6 +125,18 @@ class ArticlesList(BaseModel):
     articles: List[ArticleExtraction]
 
 
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=20))
+async def _call_llm_api(messages: list) -> Optional[str]:
+    """Chiama l'API LLM con retry su errori transitori."""
+    response = await llm_client.chat.completions.create(
+        model=LLM_MODEL,
+        messages=messages,
+        response_format={"type": "json_object"},
+        temperature=LLM_TEMPERATURE,
+    )
+    return response.choices[0].message.content
+
+
 async def _extract_articles_with_llm(
     markdown_text: str, base_url: str, max_articles: int
 ) -> List[dict]:
@@ -124,43 +150,37 @@ async def _extract_articles_with_llm(
     Analizza il seguente contenuto Markdown estratto da una pagina web ({base_url}).
     Il tuo compito è trovare i link che puntano agli articoli di notizie (news).
     Estrai ESATTAMENTE i primi {max_articles} articoli più recenti o rilevanti che trovi.
-    
+
     Per ogni articolo devi restituire:
     - title: Il titolo della notizia.
     - url: L'URL completo dell'articolo. Assicurati che sia assoluto (es. se trovi '/en-us/article/123', e la base è '{base_url}', l'URL completo potrebbe essere 'https://news.blizzard.com/en-us/article/123').
     - published_date: La data di pubblicazione, se presente nel testo vicino al link.
     - thumbnail_url: L'URL di una eventuale immagine associata, se presente nel markdown.
-    
+
     Rispondi SOLO con i dati richiesti.
-    
+
     Contenuto Markdown:
     {markdown_text[:15000]}
     """
+
+    messages = [
+        {
+            "role": "system",
+            "content": "Sei un assistente specializzato nell'estrazione di dati strutturati da pagine web Markdown. Rispondi SEMPRE e SOLO con un oggetto JSON valido.",
+        },
+        {
+            "role": "user",
+            "content": prompt
+            + '\n\nRispondi con un JSON che abbia questa struttura: {"articles": [{"title": "...", "url": "...", "published_date": "...", "thumbnail_url": "..."}]}',
+        },
+    ]
 
     try:
         logger.info(
             f"Invocazione LLM ({LLM_MODEL}) per estrazione di {max_articles} articoli..."
         )
 
-        # Usiamo la chiamata standard per massima compatibilità con server LLM locali/custom
-        response = await llm_client.chat.completions.create(
-            model=LLM_MODEL,
-            messages=[
-                {
-                    "role": "system",
-                    "content": "Sei un assistente specializzato nell'estrazione di dati strutturati da pagine web Markdown. Rispondi SEMPRE e SOLO con un oggetto JSON valido.",
-                },
-                {
-                    "role": "user",
-                    "content": prompt
-                    + '\n\nRispondi con un JSON che abbia questa struttura: {"articles": [{"title": "...", "url": "...", "published_date": "...", "thumbnail_url": "..."}]}',
-                },
-            ],
-            response_format={"type": "json_object"},
-            temperature=LLM_TEMPERATURE,
-        )
-
-        content = response.choices[0].message.content
+        content = await _call_llm_api(messages)
         if not content:
             return []
 
@@ -219,7 +239,7 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> list[dict]:
 
             # Estrai info base con LLM
             articles_meta = await _extract_articles_with_llm(
-                markdown_text, url, max_articles
+                _sanitize_markdown(markdown_text), url, max_articles
             )
             logger.info(f"L'LLM ha estratto {len(articles_meta)} link ad articoli.")
 

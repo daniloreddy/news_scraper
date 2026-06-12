@@ -1,10 +1,12 @@
 """Level 1 — pure unit tests: no HTTP, no mocked I/O."""
 
+import asyncio
 import pytest
 from pydantic import ValidationError
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
-from unittest.mock import patch
+from unittest.mock import AsyncMock, MagicMock, patch
+from tenacity import RetryError
 
 from app.scraper import _preprocess_html, ArticlesList
 from app.main import verify_token, _validate_url, ScrapeRequest, ArticleRequest
@@ -260,3 +262,222 @@ class TestArticleRequestModel:
     def test_ssrf_private_ip_rejected(self):
         with pytest.raises(ValidationError):
             ArticleRequest(url="http://10.0.0.1/")
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_markdown
+# ---------------------------------------------------------------------------
+
+
+class TestSanitizeMarkdown:
+    def test_strips_script_tag(self):
+        from app.scraper import _sanitize_markdown
+
+        result = _sanitize_markdown("Before <script>alert('xss')</script> After")
+        assert "<script>" not in result
+        assert "Before" in result
+        assert "After" in result
+
+    def test_strips_multiline_script(self):
+        from app.scraper import _sanitize_markdown
+
+        result = _sanitize_markdown("A\n<script>\nevil();\n</script>\nB")
+        assert "evil" not in result
+        assert "A" in result
+        assert "B" in result
+
+    def test_strips_iframe(self):
+        from app.scraper import _sanitize_markdown
+
+        result = _sanitize_markdown("Text <iframe src='evil.com'></iframe> End")
+        assert "<iframe" not in result
+        assert "Text" in result
+
+    def test_replaces_data_uri(self):
+        from app.scraper import _sanitize_markdown
+
+        result = _sanitize_markdown("img: data:image/png;base64,abc123==")
+        assert "data:image/png" not in result
+        assert "[DATA_URI_REMOVED]" in result
+
+    def test_strips_javascript_protocol(self):
+        from app.scraper import _sanitize_markdown
+
+        result = _sanitize_markdown("[Click](javascript:alert(1))")
+        assert "javascript:" not in result
+
+    def test_clean_markdown_unchanged(self):
+        from app.scraper import _sanitize_markdown
+
+        text = "# Heading\n\nSome [link](https://example.com) text."
+        assert _sanitize_markdown(text) == text
+
+
+# ---------------------------------------------------------------------------
+# _save_debug_file (debug mode)
+# ---------------------------------------------------------------------------
+
+
+class TestDebugMode:
+    def test_debug_true_creates_file(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from app.scraper import _save_debug_file
+
+        with patch("app.scraper.DEBUG", True):
+            _save_debug_file("output.md", "Hello debug")
+        debug_file = tmp_path / "debug" / "output.md"
+        assert debug_file.exists()
+        assert debug_file.read_text(encoding="utf-8") == "Hello debug"
+
+    def test_debug_false_no_file_created(self, tmp_path, monkeypatch):
+        monkeypatch.chdir(tmp_path)
+        from app.scraper import _save_debug_file
+
+        with patch("app.scraper.DEBUG", False):
+            _save_debug_file("output.md", "Should not appear")
+        assert not (tmp_path / "debug").exists()
+
+
+# ---------------------------------------------------------------------------
+# _scrape_article_page — content truncation and title parsing
+# ---------------------------------------------------------------------------
+
+
+class TestScrapeArticlePage:
+    def _run(self, page, url="https://example.com"):
+        from app.scraper import _scrape_article_page
+
+        return asyncio.run(_scrape_article_page(page, url))
+
+    def _make_page(self, content: str, title: str = "Title", thumbnail=None):
+        page = AsyncMock()
+        page.content.return_value = "<html><body>x</body></html>"
+        page.title.return_value = title
+        page.evaluate.return_value = thumbnail
+        mock_result = MagicMock()
+        mock_result.text_content = content
+        return page, mock_result
+
+    def test_content_truncated_at_8000_chars(self):
+        from app.scraper import md_converter
+
+        page, mock_result = self._make_page("A" * 15000)
+        with patch.object(md_converter, "convert", return_value=mock_result):
+            result = self._run(page)
+        assert len(result["content"]) == 8000
+
+    def test_short_content_not_truncated(self):
+        from app.scraper import md_converter
+
+        page, mock_result = self._make_page("Short content")
+        with patch.object(md_converter, "convert", return_value=mock_result):
+            result = self._run(page)
+        assert result["content"] == "Short content"
+
+    def test_triple_newlines_collapsed(self):
+        from app.scraper import md_converter
+
+        page, mock_result = self._make_page("Para1\n\n\n\n\nPara2")
+        with patch.object(md_converter, "convert", return_value=mock_result):
+            result = self._run(page)
+        assert "\n\n\n" not in result["content"]
+        assert "Para1" in result["content"]
+        assert "Para2" in result["content"]
+
+    def test_title_stripped_at_em_dash(self):
+        from app.scraper import md_converter
+
+        page, mock_result = self._make_page(
+            "Content", title="Article Title — Site Name"
+        )
+        with patch.object(md_converter, "convert", return_value=mock_result):
+            result = self._run(page)
+        assert result["title"] == "Article Title"
+
+    def test_title_without_em_dash_unchanged(self):
+        from app.scraper import md_converter
+
+        page, mock_result = self._make_page("Content", title="Plain Title")
+        with patch.object(md_converter, "convert", return_value=mock_result):
+            result = self._run(page)
+        assert result["title"] == "Plain Title"
+
+    def test_published_date_always_none(self):
+        from app.scraper import md_converter
+
+        page, mock_result = self._make_page("Content")
+        with patch.object(md_converter, "convert", return_value=mock_result):
+            result = self._run(page)
+        assert result["published_date"] is None
+
+    def test_thumbnail_url_from_page_evaluate(self):
+        from app.scraper import md_converter
+
+        page, mock_result = self._make_page(
+            "Content", thumbnail="https://example.com/thumb.jpg"
+        )
+        with patch.object(md_converter, "convert", return_value=mock_result):
+            result = self._run(page)
+        assert result["thumbnail_url"] == "https://example.com/thumb.jpg"
+
+
+# ---------------------------------------------------------------------------
+# _call_llm_api / _extract_articles_with_llm — retry logic
+# ---------------------------------------------------------------------------
+
+
+class TestRetryLogic:
+    def test_retries_on_transient_error_and_succeeds(self):
+        from app.scraper import _call_llm_api, llm_client
+
+        call_count = [0]
+
+        async def flaky(*args, **kwargs):
+            call_count[0] += 1
+            if call_count[0] < 3:
+                raise TimeoutError("Transient failure")
+            resp = MagicMock()
+            resp.choices[0].message.content = '{"articles": []}'
+            return resp
+
+        with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
+            with patch.object(llm_client.chat.completions, "create", side_effect=flaky):
+                result = asyncio.run(
+                    _call_llm_api([{"role": "user", "content": "test"}])
+                )
+
+        assert call_count[0] == 3
+        assert result == '{"articles": []}'
+
+    def test_raises_retry_error_after_max_attempts(self):
+        from app.scraper import _call_llm_api, llm_client
+
+        async def always_fail(*args, **kwargs):
+            raise ConnectionError("LLM unavailable")
+
+        with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
+            with patch.object(
+                llm_client.chat.completions, "create", side_effect=always_fail
+            ):
+                with pytest.raises(RetryError):
+                    asyncio.run(_call_llm_api([{"role": "user", "content": "test"}]))
+
+    def test_extract_articles_returns_empty_after_retry_exhausted(self):
+        from app.scraper import _extract_articles_with_llm, llm_client
+
+        async def always_fail(*args, **kwargs):
+            raise ConnectionError("LLM unavailable")
+
+        with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
+            with patch.object(
+                llm_client.chat.completions, "create", side_effect=always_fail
+            ):
+                result = asyncio.run(
+                    _extract_articles_with_llm(
+                        "# Test\n[Article](https://example.com)",
+                        "https://example.com",
+                        1,
+                    )
+                )
+
+        assert result == []

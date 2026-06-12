@@ -248,3 +248,76 @@ class TestAuthentication:
         # /health is public — no auth dependency
         response = client.get("/health")
         assert response.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Rate limiting
+# ---------------------------------------------------------------------------
+
+# Use RFC 5737 documentation IPs as unique per-test keys so in-memory limiter
+# state (module-level) does not bleed across tests within the same session.
+
+
+class TestRateLimiting:
+    _SCRAPE_IP = "203.0.113.1"
+    _HEALTH_IP = "203.0.113.2"
+
+    def test_scrape_returns_429_after_limit_exceeded(self, client):
+        headers = {"X-Real-IP": self._SCRAPE_IP}
+        with patch(
+            "app.main.scrape_latest_news", new=AsyncMock(return_value=[SAMPLE_ARTICLE])
+        ):
+            for _ in range(20):
+                client.post(
+                    "/scrape", json={"url": "https://example.com"}, headers=headers
+                )
+            response = client.post(
+                "/scrape", json={"url": "https://example.com"}, headers=headers
+            )
+        assert response.status_code == 429
+
+    def test_health_returns_429_after_limit_exceeded(self, client):
+        headers = {"X-Real-IP": self._HEALTH_IP}
+        for _ in range(100):
+            client.get("/health", headers=headers)
+        response = client.get("/health", headers=headers)
+        assert response.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# Published date field behaviour
+# ---------------------------------------------------------------------------
+
+
+class TestPublishedDate:
+    def test_scrape_article_published_date_can_be_none(self, client):
+        with patch(
+            "app.main.scrape_article",
+            new=AsyncMock(
+                return_value={
+                    **SAMPLE_ARTICLE,
+                    "published_date": None,
+                }
+            ),
+        ):
+            response = client.post(
+                "/scrape/article", json={"url": "https://example.com"}
+            )
+        assert response.status_code == 200
+        assert response.json()["published_date"] is None
+
+    def test_scrape_published_date_propagated_when_present(self, client):
+        with patch(
+            "app.main.scrape_latest_news",
+            new=AsyncMock(
+                return_value=[
+                    {
+                        **SAMPLE_ARTICLE,
+                        "published_date": "2026-06-12",
+                    }
+                ]
+            ),
+        ):
+            response = client.post("/scrape", json={"url": "https://example.com"})
+        assert response.status_code == 200
+        assert response.json()[0]["published_date"] == "2026-06-12"
