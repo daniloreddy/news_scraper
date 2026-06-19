@@ -1,5 +1,6 @@
 services:
   news-scraper:
+    image: ghcr.io/daniloreddy/news_scraper:latest
     build: .
     container_name: news-scraper
     restart: unless-stopped

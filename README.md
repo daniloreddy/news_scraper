@@ -38,28 +38,68 @@ The microservice utilizes a **Smart/LLM-based Scraping** approach that is comple
 - **MarkItDown**: Cleans the resulting HTML by stripping script, CSS, navigation, and ads, converting it into a clean, structured, and token-efficient Markdown document.
 - **OpenAI Client**: Submits the Markdown to the configured LLM and validates the structured output (JSON) to extract the article list.
 
-## Deployment
+## Quick Start with Docker
 
-### 1. Prerequisites
+> Requirement: **Docker** with the Compose plugin installed. No need to clone the project.
+
+**1. Download the Compose file**
 
 ```bash
-# Install Docker if not already present
-curl -fsSL https://get.docker.com | sh
-sudo usermod -aG docker $USER
-# Log in again to apply group membership
+curl -O https://raw.githubusercontent.com/daniloreddy/news_scraper/main/docker-compose.yml
 ```
 
-### 2. Build and Start
+**2. Create a `.env` file** in the same folder:
+
+```env
+LLM_BASE_URL=https://api.openai.com/v1
+LLM_API_KEY=your-api-key-here
+LLM_MODEL=gpt-4o-mini
+LLM_TEMPERATURE=0.1
+LLM_TIMEOUT=60.0
+API_AUTH_TOKEN=your-super-secret-token-here
+SCRAPE_TIMEOUT=300
+RATE_LIMIT=20/minute
+DEBUG=false
+```
+
+**3. Start the container**
 
 ```bash
-git clone <repo> news-scraper
-cd news-scraper
-docker compose up -d --build
+docker compose up -d
 ```
 
 The service will be available at `http://localhost:8088`.
 
-### 3. Cloudflare Tunnel
+**Update image**
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+**Stop**
+
+```bash
+docker compose down
+```
+
+---
+
+## Local Development
+
+> Only needed to modify the source code.
+
+**Requirements**: Docker, Python 3.9+
+
+```bash
+git clone https://github.com/daniloreddy/news_scraper.git news-scraper
+cd news-scraper
+cp .env.example .env   # then edit .env with your values
+docker compose up -d --build
+```
+
+---
+
+## Cloudflare Tunnel
 
 Add the following to your tunnel's `config.yml`:
 
@@ -72,7 +112,7 @@ ingress:
 
 Alternatively, configure it via the Cloudflare Tunnel dashboard by adding a public hostname.
 
-### 4. Quick Test
+## Quick Test
 
 ```bash
 # Health check
@@ -81,6 +121,7 @@ curl https://your.end.point/health
 # Scrape the latest news (takes a few seconds for Playwright and LLM processing)
 curl -X POST https://your.end.point/scrape \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-super-secret-token-here" \
   -d '{"max_articles": 1}'
 ```
 
