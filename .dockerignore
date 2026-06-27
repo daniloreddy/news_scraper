@@ -1,0 +1,12 @@
+.env
+.git
+.gitignore
+.nicegui/
+data/
+debug/
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+out.log
