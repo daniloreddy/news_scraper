@@ -2,6 +2,7 @@
 
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -44,9 +45,14 @@ class ConfigManager:
 
     def _load(self) -> None:
         merged = dict(_DEFAULTS)
+        # .env file (local dev)
         for k, v in dotenv_values().items():
             if v is not None:
                 merged[k] = v
+        # OS environment variables — takes precedence (Docker / systemd / shell exports)
+        for k in _DEFAULTS:
+            if k in os.environ:
+                merged[k] = os.environ[k]
         if _OVERRIDE_FILE.exists():
             try:
                 overrides: dict[str, Any] = json.loads(
