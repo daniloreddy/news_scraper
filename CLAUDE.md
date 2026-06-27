@@ -35,7 +35,7 @@ venv\Scripts\python scripts/test_api.py
 ```
 docker compose up -d --build
 ```
-Maps host:8088 → container:8000. Requires 512MB shm for Chromium. Data persisted in named volume `news-scraper-data`.
+Maps host:8088 → container:8000. Requires 512MB shm for Chromium. Data persisted in bind mount `./data:/app/data`.
 
 **No test suite exists.** No pytest config or `tests/` directory.
 

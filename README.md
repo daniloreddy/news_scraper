@@ -104,7 +104,7 @@ docker compose down
 git clone https://github.com/daniloreddy/news_scraper.git news-scraper
 cd news-scraper
 cp .env.example .env   # then edit .env with your values
-docker compose up -d --build
+docker compose -f docker-compose-dev.yml up --build
 ```
 
 ---

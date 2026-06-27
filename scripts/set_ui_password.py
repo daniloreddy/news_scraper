@@ -1,18 +1,38 @@
+#!/usr/bin/env python3
 """CLI to set the dashboard UI password before first run."""
-
-import getpass
+import subprocess
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+_ROOT = Path(__file__).parent.parent
+_VENV_DIR = _ROOT / ("venv" if sys.platform == "win32" else ".venv")
+_VENV_PYTHON = _VENV_DIR / ("Scripts/python.exe" if sys.platform == "win32" else "bin/python")
 
-from app.ui.auth import AuthManager
 
-auth = AuthManager(auth_file=Path("data/auth.json"), cookie_name="news_scraper_ui")
+def _bootstrap() -> None:
+    if not _VENV_PYTHON.exists():
+        print("Creating venv...")
+        subprocess.run([sys.executable, "-m", "venv", str(_VENV_DIR)], check=True)
+        subprocess.run(
+            [str(_VENV_PYTHON), "-m", "pip", "install", "-r", str(_ROOT / "requirements.txt")],
+            check=True,
+        )
+    if Path(sys.executable).resolve() != _VENV_PYTHON.resolve():
+        sys.exit(subprocess.run([str(_VENV_PYTHON), *sys.argv]).returncode)
+
+
+_bootstrap()
+
+import getpass  # noqa: E402
+
+sys.path.insert(0, str(_ROOT))
+
+from app.ui.auth import AuthManager  # noqa: E402
 
 
 def main() -> None:
     print("=== News Scraper — Imposta password dashboard ===")
+    auth = AuthManager(auth_file=Path("data/auth.json"), cookie_name="news_scraper_ui")
     pw1 = getpass.getpass("Nuova password: ")
     pw2 = getpass.getpass("Conferma password: ")
     if pw1 != pw2:
