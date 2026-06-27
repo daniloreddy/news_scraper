@@ -13,7 +13,4 @@ services:
     # Playwright ha bisogno di /dev/shm abbastanza grande
     shm_size: "512m"
     volumes:
-      - news-scraper-data:/app/data
-
-volumes:
-  news-scraper-data:
+      - ./data:/app/data
