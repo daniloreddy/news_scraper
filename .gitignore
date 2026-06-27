@@ -22,3 +22,8 @@ Thumbs.db
 debug/
 *.log
 temp_*.html
+
+# Runtime data (generated at startup)
+data/metrics.db
+data/config.json
+data/auth.json

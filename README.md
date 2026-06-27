@@ -1,6 +1,6 @@
 # news-scraper
 
-Python/FastAPI microservice that scrapes news from any website and exposes a structured REST API.
+Python/FastAPI microservice that scrapes news from any website and exposes a structured REST API. Includes a NiceGUI monitoring dashboard at `/ui/` with config hot-reload.
 
 ## Architecture
 
@@ -22,7 +22,7 @@ The microservice utilizes a **Smart/LLM-based Scraping** approach that is comple
                  [MarkItDown (Microsoft)]
                               │ (Converting HTML -> Markdown)
                               ▼
-                    [OpenAI API / Local LLM]
+                    [LLM (OpenAI-compatible endpoint)]
                               │ (Structured Extraction of Links)
                               ▼
                [Scraping Individual Articles]
@@ -36,13 +36,19 @@ The microservice utilizes a **Smart/LLM-based Scraping** approach that is comple
 - **Playwright (Headless Chromium)**: Fully renders dynamic page content executed via JavaScript before parsing.
 - **BeautifulSoup (Pre-processing)**: Automatically identifies and normalizes nested links or non-standard tags (such as `<blz-button>` containing `href`) into standard `<a>` tags and resolves relative paths into absolute URLs.
 - **MarkItDown**: Cleans the resulting HTML by stripping script, CSS, navigation, and ads, converting it into a clean, structured, and token-efficient Markdown document.
-- **OpenAI Client**: Submits the Markdown to the configured LLM and validates the structured output (JSON) to extract the article list.
+- **LLM (httpx direct POST)**: Submits the Markdown to any OpenAI-compatible endpoint (Ollama, LM Studio, OpenAI, etc.) via direct HTTP POST — no SDK dependency. Validates and parses the structured JSON response to extract the article list.
 
 ## Quick Start with Docker
 
 > Requirement: **Docker** with the Compose plugin installed. No need to clone the project.
 
-**1. Download the Compose file**
+**1. Download the Compose file and set the dashboard password**
+
+```bash
+python scripts/set_ui_password.py
+```
+
+**2. Download the Compose file**
 
 ```bash
 curl -O https://raw.githubusercontent.com/daniloreddy/news_scraper/main/docker-compose.yml
@@ -56,6 +62,7 @@ LLM_API_KEY=your-api-key-here
 LLM_MODEL=gpt-4o-mini
 LLM_TEMPERATURE=0.1
 LLM_TIMEOUT=60.0
+LLM_MAX_PROMPT_CHARS=8000
 API_AUTH_TOKEN=your-super-secret-token-here
 SCRAPE_TIMEOUT=300
 RATE_LIMIT=20/minute

@@ -6,7 +6,7 @@
     <title>news-scraper API Documentation</title>
     <style>
         :root {
-            --primary: #c41e3a; /* Diablo Red */
+            --primary: #c41e3a;
             --dark: #121212;
             --light: #e0e0e0;
             --gray: #2c2c2c;
@@ -27,9 +27,9 @@
         }
         header h1 { margin: 0; font-size: 2.5rem; text-transform: uppercase; letter-spacing: 2px; }
         header p { margin: 0.5rem 0 0; opacity: 0.9; }
-        
+
         main { max-width: 900px; margin: 2rem auto; padding: 0 1.5rem; }
-        
+
         .endpoint {
             background-color: var(--gray);
             border-radius: 8px;
@@ -37,6 +37,8 @@
             padding: 1.5rem;
             border-left: 5px solid var(--primary);
         }
+        .endpoint.ui { border-left-color: #90CAF9; }
+
         .method {
             display: inline-block;
             padding: 0.3rem 0.8rem;
@@ -44,15 +46,16 @@
             font-weight: bold;
             text-transform: uppercase;
             margin-right: 1rem;
-            background-color: #4caf50; /* Green for GET/POST */
+            background-color: #4caf50;
             color: white;
         }
-        .method.post { background-color: #2196f3; } /* Blue for POST */
+        .method.post { background-color: #2196f3; }
         .url { font-family: 'Courier New', Courier, monospace; font-size: 1.1rem; }
-        
+
         h2 { border-bottom: 1px solid #444; padding-bottom: 0.5rem; margin-top: 2rem; }
         h3 { color: var(--primary); }
-        
+        h3.ui-h3 { color: #90CAF9; }
+
         pre {
             background-color: #000;
             padding: 1rem;
@@ -61,58 +64,55 @@
             border: 1px solid #333;
         }
         code { font-family: 'Consolas', 'Monaco', monospace; color: #569cd6; }
-        
+
         table { width: 100%; border-collapse: collapse; margin: 1rem 0; }
         th, td { text-align: left; padding: 0.8rem; border-bottom: 1px solid #444; }
         th { color: var(--primary); }
-        
+
         .badge {
             background-color: #444;
             padding: 0.2rem 0.5rem;
             border-radius: 4px;
             font-size: 0.85rem;
         }
+        .badge.token { background-color: var(--primary); color: white; }
+        .badge.ui-auth { background-color: #1565C0; color: white; }
     </style>
 </head>
 <body>
 
 <header>
     <h1>news-scraper API</h1>
-    <p>Documentazione specifica per l'integrazione n8n e scraping news</p>
+    <p>v1.1.0 — Scraping news · Dashboard su <code>/ui/</code></p>
 </header>
 
 <main>
     <h2>Panoramica</h2>
     <p>Il microservizio espone endpoint REST per l'estrazione di notizie tramite Playwright. È ottimizzato per restituire testo pulito pronto per l'elaborazione da parte di modelli LLM.</p>
-    
-    <p><strong>Autenticazione:</strong> Se configurata nel file <code>.env</code> tramite <code>API_AUTH_TOKEN</code>, tutti gli endpoint di scraping (esclusa la rotta di health check) richiedono l'invio dell'header HTTP di autorizzazione Bearer:</p>
-    <pre><code>Authorization: Bearer INSERISCI_QUI_IL_TUO_TOKEN</code></pre>
 
-    <h2>Endpoints</h2>
+    <p><strong>Autenticazione API (scraping):</strong> Se <code>API_AUTH_TOKEN</code> è configurato, tutti gli endpoint <code>/scrape*</code> richiedono:</p>
+    <pre><code>Authorization: Bearer &lt;API_AUTH_TOKEN&gt;</code></pre>
+
+    <p><strong>Configurazione LLM:</strong> Le chiamate all'LLM usono HTTP POST diretto all'endpoint OpenAI-compatible (<code>LLM_BASE_URL/chat/completions</code>). Supporta Ollama, LM Studio, e qualsiasi endpoint compatibile OpenAI.</p>
+
+    <h2>Endpoints di Scraping</h2>
 
     <!-- GET /health -->
     <div class="endpoint">
         <h3><span class="method">GET</span> <span class="url">/health</span></h3>
         <p>Verifica lo stato di salute del servizio.</p>
         <h4>Risposta:</h4>
-        <pre><code>{
-  "status": "ok"
-}</code></pre>
+        <pre><code>{"status": "ok"}</code></pre>
     </div>
 
     <!-- POST /scrape -->
     <div class="endpoint">
-        <h3><span class="method post">POST</span> <span class="url">/scrape</span> <span class="badge" style="background-color: var(--primary); color: white;">Token</span></h3>
-        <p>Scansiona una pagina indice (es. Diablo Immortal News) ed estrae le ultime N notizie.</p>
-        
+        <h3><span class="method post">POST</span> <span class="url">/scrape</span> <span class="badge token">Token</span></h3>
+        <p>Scansiona una pagina indice ed estrae le ultime N notizie tramite LLM.</p>
+
         <h4>Body (JSON):</h4>
         <table>
-            <tr>
-                <th>Campo</th>
-                <th>Tipo</th>
-                <th>Default</th>
-                <th>Descrizione</th>
-            </tr>
+            <tr><th>Campo</th><th>Tipo</th><th>Default</th><th>Descrizione</th></tr>
             <tr>
                 <td><code>url</code></td>
                 <td>String</td>
@@ -123,22 +123,17 @@
                 <td><code>max_articles</code></td>
                 <td>Integer</td>
                 <td><code>1</code></td>
-                <td>Numero massimo di articoli da estrarre e processare. Valore accettato: 1–10.</td>
+                <td>Numero massimo di articoli (1–10).</td>
             </tr>
         </table>
 
-        <h4>Esempio richiesta:</h4>
-        <pre><code>{
-  "max_articles": 3
-}</code></pre>
-
-        <h4>Risposta (Array di oggetti):</h4>
+        <h4>Risposta (Array):</h4>
         <pre><code>[
   {
     "title": "Titolo Notizia",
-    "url": "https://news.blizzard.com/...",
+    "url": "https://...",
     "published_date": "10 giugno 2026",
-    "content": "Testo estratto dell'articolo...",
+    "content": "Testo estratto...",
     "thumbnail_url": "https://..."
   }
 ]</code></pre>
@@ -146,17 +141,12 @@
 
     <!-- POST /scrape/article -->
     <div class="endpoint">
-        <h3><span class="method post">POST</span> <span class="url">/scrape/article</span> <span class="badge" style="background-color: var(--primary); color: white;">Token</span></h3>
-        <p>Estrae i dati da un singolo URL specifico di un articolo.</p>
+        <h3><span class="method post">POST</span> <span class="url">/scrape/article</span> <span class="badge token">Token</span></h3>
+        <p>Estrae i dati da un singolo URL articolo.</p>
 
         <h4>Body (JSON):</h4>
         <table>
-            <tr>
-                <th>Campo</th>
-                <th>Tipo</th>
-                <th>Obbligatorio</th>
-                <th>Descrizione</th>
-            </tr>
+            <tr><th>Campo</th><th>Tipo</th><th>Obbligatorio</th><th>Descrizione</th></tr>
             <tr>
                 <td><code>url</code></td>
                 <td>String</td>
@@ -165,32 +155,102 @@
             </tr>
         </table>
 
-        <h4>Esempio richiesta:</h4>
-        <pre><code>{
-  "url": "https://diabloimmortal.blizzard.com/en-us/news/article/..."
-}</code></pre>
-
         <h4>Risposta:</h4>
         <pre><code>{
   "title": "Titolo Articolo",
-  "url": "https://diabloimmortal.blizzard.com/en-us/news/article/...",
+  "url": "https://...",
   "published_date": null,
-  "content": "Testo estratto dell'articolo...",
+  "content": "Testo estratto...",
   "thumbnail_url": "https://..."
 }</code></pre>
     </div>
 
+    <h2>Dashboard Web (NiceGUI)</h2>
+
+    <!-- GET /login -->
+    <div class="endpoint ui">
+        <h3 class="ui-h3"><span class="method">GET</span> <span class="url">/login</span></h3>
+        <p>Pagina di login per la dashboard. Restituisce HTML self-contained con form password.</p>
+    </div>
+
+    <!-- POST /auth/login -->
+    <div class="endpoint ui">
+        <h3 class="ui-h3"><span class="method post">POST</span> <span class="url">/auth/login</span></h3>
+        <p>Autentica con password e imposta il cookie di sessione <code>news_scraper_ui</code> (HttpOnly, SameSite=Strict, TTL 7 giorni).</p>
+
+        <h4>Body (form-data):</h4>
+        <table>
+            <tr><th>Campo</th><th>Tipo</th><th>Descrizione</th></tr>
+            <tr><td><code>password</code></td><td>String</td><td>Password configurata con <code>scripts/set_ui_password.py</code></td></tr>
+        </table>
+
+        <h4>Risposte:</h4>
+        <table>
+            <tr><th>Status</th><th>Body</th><th>Descrizione</th></tr>
+            <tr><td>200</td><td><code>{"ok": true}</code></td><td>Login riuscito, cookie settato</td></tr>
+            <tr><td>401</td><td><code>{"detail": "..."}</code></td><td>Password non valida o non configurata</td></tr>
+            <tr><td>429</td><td><code>{"detail": "..."}</code></td><td>Rate limit (5 tentativi/IP per 5 min, 20 globali/min)</td></tr>
+        </table>
+    </div>
+
+    <!-- GET /auth/logout -->
+    <div class="endpoint ui">
+        <h3 class="ui-h3"><span class="method">GET</span> <span class="url">/auth/logout</span></h3>
+        <p>Elimina il cookie di sessione e reindirizza a <code>/login</code>.</p>
+    </div>
+
+    <!-- /ui/ -->
+    <div class="endpoint ui">
+        <h3 class="ui-h3"><span class="method">GET</span> <span class="url">/ui/</span> <span class="badge ui-auth">Cookie</span></h3>
+        <p>Dashboard NiceGUI — metriche delle ultime 24h: totale richieste, OK/Errori, durata media, token LLM prompt/completion. Storico degli ultimi 50 request. Auto-refresh ogni 30 secondi.</p>
+        <p>Richiede cookie <code>news_scraper_ui</code>. Redirect a <code>/login</code> se assente o scaduto.</p>
+    </div>
+
+    <!-- /ui/config -->
+    <div class="endpoint ui">
+        <h3 class="ui-h3"><span class="method">GET</span> <span class="url">/ui/config</span> <span class="badge ui-auth">Cookie</span></h3>
+        <p>Editor configurazione con hot reload. Modifica LLM (base URL, API key, modello, temperature, timeout), Scraping (timeout, debug mode), API (rate limit, auth token).</p>
+        <p>Le modifiche LLM sono attive immediatamente. <code>RATE_LIMIT</code> richiede restart.</p>
+        <p>Override salvati in <code>data/config.json</code> — priorità su <code>.env</code>.</p>
+    </div>
+
+    <h2>Configurazione Runtime</h2>
+    <table>
+        <tr><th>Variabile</th><th>Default</th><th>Descrizione</th></tr>
+        <tr><td><code>LLM_BASE_URL</code></td><td><code>http://localhost:1234/v1</code></td><td>Base URL endpoint OpenAI-compatible (Ollama, LM Studio, ecc.)</td></tr>
+        <tr><td><code>LLM_API_KEY</code></td><td>—</td><td>API key per autenticazione LLM (opzionale)</td></tr>
+        <tr><td><code>LLM_MODEL</code></td><td><code>gpt-4o-mini</code></td><td>Nome modello da usare</td></tr>
+        <tr><td><code>LLM_TEMPERATURE</code></td><td><code>0.1</code></td><td>Temperature per l'estrazione articoli</td></tr>
+        <tr><td><code>LLM_TIMEOUT</code></td><td><code>60.0</code></td><td>Timeout chiamate LLM in secondi</td></tr>
+        <tr><td><code>API_AUTH_TOKEN</code></td><td>—</td><td>Bearer token per endpoint /scrape*. Lascia vuoto per disabilitare</td></tr>
+        <tr><td><code>SCRAPE_TIMEOUT</code></td><td><code>300</code></td><td>Timeout globale scraping in secondi (HTTP 504 al superamento)</td></tr>
+        <tr><td><code>RATE_LIMIT</code></td><td><code>20/minute</code></td><td>Rate limit per IP (formato: N/second|minute|hour)</td></tr>
+        <tr><td><code>DEBUG</code></td><td><code>false</code></td><td>Salva HTML/MD/JSON in debug/ per analisi</td></tr>
+    </table>
+
     <h2>Dettagli Tecnici</h2>
     <ul>
-        <li><strong>Smart Scraping:</strong> Il servizio non utilizza fragili selettori CSS/Regex. Converte la pagina in Markdown tramite <code>MarkItDown</code> di Microsoft e delega l'identificazione strutturale dei link all'LLM (OpenAI API compatibile).</li>
-        <li><strong>Universalità dei Link:</strong> Include un motore di pre-processing che normalizza i Custom Web Components con attributi <code>href</code> (es. <code>&lt;blz-button&gt;</code>) in tag <code>&lt;a&gt;</code> standard e risolve gli URL relativi in assoluti prima della conversione.</li>
-        <li><strong>Formato Data:</strong> Il campo <code>published_date</code> viene estratto dall'LLM durante lo scraping della pagina indice (<code>/scrape</code>). Per lo scraping di singoli articoli (<code>/scrape/article</code>) il campo è sempre <code>null</code>, non essendo disponibile nei metadati della pagina.</li>
-        <li><strong>Limiti Contenuto:</strong> Il campo <code>content</code> è limitato a 8000 caratteri per evitare overflow nei prompt LLM di n8n.</li>
-        <li><strong>Timeout:</strong> Il tempo massimo per ogni operazione di scraping è configurabile tramite la variabile d'ambiente <code>SCRAPE_TIMEOUT</code> (default: 300 secondi). Al superamento del timeout l'endpoint risponde con HTTP 504.</li>
-        <li><strong>Rate limiting:</strong> Gli endpoint di scraping sono soggetti a un limite per IP configurabile tramite <code>RATE_LIMIT</code> (default: <code>20/minute</code>). Al superamento del limite la risposta è HTTP 429. Il servizio riconosce gli header Cloudflare (<code>CF-Connecting-IP</code>) per identificare correttamente il client reale.</li>
-        <li><strong>Validazione URL:</strong> I campi <code>url</code> accettano solo schemi <code>http</code> e <code>https</code>. URL che puntano a indirizzi IP privati, loopback o localhost vengono rifiutati con HTTP 422.</li>
-        <li><strong>Tecnologia:</strong> Basato su Playwright (Chromium) per gestire contenuti caricati dinamicamente via JavaScript, integrato con l'auto-installazione del browser all'avvio.</li>
+        <li><strong>LLM integration:</strong> HTTP POST diretto a <code>{LLM_BASE_URL}/chat/completions</code> via httpx. Schema payload OpenAI-compatible con <code>response_format: json_object</code>.</li>
+        <li><strong>Smart Scraping:</strong> Playwright → BeautifulSoup (normalizzazione) → MarkItDown (HTML→Markdown) → LLM (estrazione strutturata).</li>
+        <li><strong>Hot reload config:</strong> La UI scrive overrides in <code>data/config.json</code> con priorità su <code>.env</code>. Il cambio di LLM_BASE_URL/LLM_API_KEY/LLM_TIMEOUT ricostruisce il client httpx immediatamente.</li>
+        <li><strong>Metriche:</strong> SQLite (<code>data/metrics.db</code>) — ogni request registra endpoint, URL, status, durata, token LLM prompt/completion.</li>
+        <li><strong>Auth dashboard:</strong> Password hashed con scrypt (n=16384). Token JWT cookie HttpOnly. Rate limit: 5 tentativi/IP per 5 min, 20 globali/60s.</li>
+        <li><strong>Timeout:</strong> <code>SCRAPE_TIMEOUT</code> configura il timeout globale. Al superamento: HTTP 504.</li>
+        <li><strong>Rate limiting:</strong> <code>RATE_LIMIT</code> per IP. Riconosce CF-Connecting-IP, X-Real-IP, X-Forwarded-For.</li>
+        <li><strong>Validazione URL:</strong> Solo http/https. Blocca IP privati/loopback (SSRF guard) — risponde HTTP 422.</li>
+        <li><strong>Concorrenza:</strong> Max 3 browser Playwright simultanei (semaforo).</li>
     </ul>
+
+    <h2>Setup iniziale</h2>
+    <pre><code># 1. Imposta password dashboard
+venv\Scripts\python scripts\set_ui_password.py
+
+# 2. Avvia
+scripts\run_local.bat
+# oppure
+venv\Scripts\python -m uvicorn app.main:app --reload --port 8088 --loop asyncio
+
+# 3. Accedi a http://localhost:8088/ui/</code></pre>
 </main>
 
 </body>

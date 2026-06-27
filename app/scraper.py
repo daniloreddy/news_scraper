@@ -1,55 +1,44 @@
 """
 Logica di scraping con Playwright.
-- scrape_latest_news: apre la homepage DI, estrae i link delle news
+- scrape_latest_news: apre la homepage, estrae i link delle news via LLM
 - scrape_article: apre un articolo, estrae titolo, data, testo pulito
 """
 
-import os
-import re
 import json
 import logging
+import os
+import re
 import tempfile
-from typing import Optional, List
+from dataclasses import dataclass, field
+from typing import List, Optional
+from urllib.parse import urlparse
+
+import httpx
 from bs4 import BeautifulSoup
-from playwright.async_api import async_playwright, Page
 from markitdown import MarkItDown
-from pydantic import BaseModel, Field
-from openai import AsyncOpenAI
-from dotenv import load_dotenv
+from playwright.async_api import Page, async_playwright
+from pydantic import BaseModel, Field as PydanticField
 from tenacity import retry, stop_after_attempt, wait_exponential
+
+from .config import config
 
 logger = logging.getLogger(__name__)
 
-# Carica variabili d'ambiente da .env
-load_dotenv()
-
-# Configurazione LLM
-LLM_BASE_URL = os.getenv("LLM_BASE_URL") or "https://api.openai.com/v1"
-LLM_API_KEY = os.getenv("LLM_API_KEY") or ""
-LLM_MODEL = os.getenv("LLM_MODEL") or "gpt-4o-mini"
-
-temp_val = os.getenv("LLM_TEMPERATURE")
-LLM_TEMPERATURE = float(temp_val) if temp_val and temp_val.strip() else 0.1
-
-timeout_val = os.getenv("LLM_TIMEOUT")
-LLM_TIMEOUT = float(timeout_val) if timeout_val and timeout_val.strip() else 60.0
-
-debug_val = os.getenv("DEBUG")
-DEBUG = debug_val.lower() == "true" if debug_val else False
-
-# Inizializza client OpenAI asincrono con custom default headers
-llm_client = AsyncOpenAI(
-    base_url=LLM_BASE_URL,
-    api_key=LLM_API_KEY,
-    timeout=LLM_TIMEOUT,
-    default_headers={
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-        "Accept": "application/json",
-    },
-)
-
-# Inizializza MarkItDown
 md_converter = MarkItDown()
+
+
+@dataclass
+class ScrapeResult:
+    articles: list[dict]
+    prompt_tokens: int = field(default=0)
+    completion_tokens: int = field(default=0)
+
+
+@dataclass
+class _LLMResult:
+    content: Optional[str]
+    prompt_tokens: int = field(default=0)
+    completion_tokens: int = field(default=0)
 
 
 def _sanitize_markdown(text: str) -> str:
@@ -65,37 +54,32 @@ def _sanitize_markdown(text: str) -> str:
     return text
 
 
-def _save_debug_file(filename: str, content: str):
-    """Salva il contenuto in una cartella di debug se DEBUG è attivo."""
-    if not DEBUG:
+def _save_debug_file(filename: str, content: str) -> None:
+    if not config.get_bool("DEBUG"):
         return
     try:
         os.makedirs("debug", exist_ok=True)
         filepath = os.path.join("debug", filename)
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
-        logger.info(f"[DEBUG] File salvato: {filepath}")
+        logger.info("[DEBUG] File salvato: %s", filepath)
     except Exception as e:
-        logger.warning(f"Impossibile salvare il file di debug {filename}: {e}")
+        logger.warning("Impossibile salvare il file di debug %s: %s", filename, e)
 
 
 def _preprocess_html(html_content: str, base_url: str) -> str:
-    """Pre-elabora l'HTML convertendo i tag custom con href in tag <a> standard e rendendo gli URL assoluti."""
-    from urllib.parse import urlparse
-
+    """Converte tag custom con href in <a> standard e rende gli URL assoluti."""
     try:
         soup = BeautifulSoup(html_content, "html.parser")
-        parsed_base = urlparse(base_url)
-        base_origin = f"{parsed_base.scheme}://{parsed_base.netloc}"
+        parsed = urlparse(base_url)
+        base_origin = f"{parsed.scheme}://{parsed.netloc}"
 
         for tag in soup.find_all(lambda t: t.has_attr("href")):
             href = str(tag["href"]).strip()
-            # Rendi l'URL assoluto se è relativo
             if href.startswith("/"):
                 href = f"{base_origin}{href}"
             tag["href"] = href
 
-            # Se non è un tag 'a', lo convertiamo in 'a'
             if tag.name != "a":
                 new_tag = soup.new_tag("a", href=href)
                 new_tag.extend(tag.contents)
@@ -103,20 +87,17 @@ def _preprocess_html(html_content: str, base_url: str) -> str:
 
         return str(soup)
     except Exception as e:
-        logger.warning(f"Errore durante il preprocessing HTML: {e}")
+        logger.warning("Errore durante il preprocessing HTML: %s", e)
         return html_content
 
 
 class ArticleExtraction(BaseModel):
-    title: str = Field(description="Titolo della notizia o dell'articolo.")
-    url: str = Field(
-        description="URL assoluto completo che porta all'articolo. Se è un path relativo, convertilo in assoluto."
+    title: str = PydanticField(description="Titolo della notizia o dell'articolo.")
+    url: str = PydanticField(description="URL assoluto completo che porta all'articolo.")
+    published_date: Optional[str] = PydanticField(
+        description="Data di pubblicazione estratta, se presente.", default=None
     )
-    published_date: Optional[str] = Field(
-        description="Data di pubblicazione estratta, possibilmente in formato stringa leggibile.",
-        default=None,
-    )
-    thumbnail_url: Optional[str] = Field(
+    thumbnail_url: Optional[str] = PydanticField(
         description="URL dell'immagine di copertina, se presente.", default=None
     )
 
@@ -126,26 +107,54 @@ class ArticlesList(BaseModel):
 
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=20))
-async def _call_llm_api(messages: list) -> Optional[str]:
-    """Chiama l'API LLM con retry su errori transitori."""
-    response = await llm_client.chat.completions.create(
-        model=LLM_MODEL,
-        messages=messages,
-        response_format={"type": "json_object"},
-        temperature=LLM_TEMPERATURE,
+async def _call_llm_api(messages: list) -> _LLMResult:
+    """POST a {LLM_BASE_URL}/chat/completions con retry su errori transitori."""
+    payload = {
+        "model": config.get("LLM_MODEL"),
+        "messages": messages,
+        "response_format": {"type": "json_object"},
+        "temperature": config.get_float("LLM_TEMPERATURE", 0.1),
+    }
+
+    headers: dict[str, str] = {"Content-Type": "application/json"}
+    api_key = config.get("LLM_API_KEY")
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+
+    async with httpx.AsyncClient(
+        base_url=config.get("LLM_BASE_URL"),
+        timeout=config.get_float("LLM_TIMEOUT", 60.0),
+    ) as client:
+        resp = await client.post(
+            "/chat/completions",
+            json=payload,
+            headers=headers,
+        )
+
+    if not resp.is_success:
+        # Extract server-side error message for actionable logging
+        try:
+            err_body = resp.json()
+            err_msg = err_body.get("error", {}).get("message") or resp.text
+        except Exception:
+            err_msg = resp.text[:300]
+        logger.error("LLM %s %s: %s", resp.status_code, config.get("LLM_BASE_URL"), err_msg)
+        resp.raise_for_status()
+
+    data = resp.json()
+    content = data.get("choices", [{}])[0].get("message", {}).get("content")
+    usage = data.get("usage", {})
+    return _LLMResult(
+        content=content,
+        prompt_tokens=usage.get("prompt_tokens", 0),
+        completion_tokens=usage.get("completion_tokens", 0),
     )
-    return response.choices[0].message.content
 
 
 async def _extract_articles_with_llm(
     markdown_text: str, base_url: str, max_articles: int
-) -> List[dict]:
-    """Usa l'LLM per estrarre la lista di articoli dal Markdown."""
-    if not LLM_API_KEY:
-        logger.warning(
-            "LLM_API_KEY non impostata. L'estrazione potrebbe fallire se il server richiede autenticazione."
-        )
-
+) -> tuple[List[dict], int, int]:
+    """Estrae articoli dal Markdown via LLM. Restituisce (articoli, prompt_tokens, completion_tokens)."""
     prompt = f"""
     Analizza il seguente contenuto Markdown estratto da una pagina web ({base_url}).
     Il tuo compito è trovare i link che puntano agli articoli di notizie (news).
@@ -160,7 +169,7 @@ async def _extract_articles_with_llm(
     Rispondi SOLO con i dati richiesti.
 
     Contenuto Markdown:
-    {markdown_text[:15000]}
+    {markdown_text[:config.get_int("LLM_MAX_PROMPT_CHARS", 8000)]}
     """
 
     messages = [
@@ -177,24 +186,31 @@ async def _extract_articles_with_llm(
 
     try:
         logger.info(
-            f"Invocazione LLM ({LLM_MODEL}) per estrazione di {max_articles} articoli..."
+            "Invocazione LLM (%s) per estrazione di %d articoli...",
+            config.get("LLM_MODEL"),
+            max_articles,
         )
 
-        content = await _call_llm_api(messages)
-        if not content:
-            return []
+        result = await _call_llm_api(messages)
+        if not result.content:
+            return [], result.prompt_tokens, result.completion_tokens
 
-        _save_debug_file("llm_output.json", content)
+        _save_debug_file("llm_output.json", result.content)
 
-        parsed = ArticlesList.model_validate(json.loads(content))
-        return [a.model_dump() for a in parsed.articles[:max_articles]]
+        raw = result.content.strip()
+        if raw.startswith("```"):
+            raw = re.sub(r"^```(?:json)?\s*", "", raw)
+            raw = re.sub(r"\s*```\s*$", "", raw.strip())
+        parsed = ArticlesList.model_validate(json.loads(raw))
+        articles = [a.model_dump() for a in parsed.articles[:max_articles]]
+        return articles, result.prompt_tokens, result.completion_tokens
 
     except Exception as e:
-        logger.error(f"Errore durante l'estrazione LLM: {e}")
-        return []
+        logger.error("Errore durante l'estrazione LLM: %s", e)
+        return [], 0, 0
 
 
-async def scrape_latest_news(url: str, max_articles: int = 1) -> list[dict]:
+async def scrape_latest_news(url: str, max_articles: int = 1) -> ScrapeResult:
     """
     1. Scarica l'HTML con Playwright.
     2. Lo converte in Markdown.
@@ -212,14 +228,12 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> list[dict]:
         page = await context.new_page()
 
         try:
-            logger.info(f"Apertura homepage: {url}")
+            logger.info("Apertura homepage: %s", url)
             await page.goto(url, wait_until="networkidle", timeout=30000)
 
-            # Estrai HTML e converti
             html_content = await page.content()
             _save_debug_file("playwright_output.html", html_content)
 
-            # Pre-processamento per normalizzare i tag e gli URL
             preprocessed_html = _preprocess_html(html_content, url)
             _save_debug_file("playwright_preprocessed.html", preprocessed_html)
 
@@ -237,20 +251,18 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> list[dict]:
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
 
-            # Estrai info base con LLM
-            articles_meta = await _extract_articles_with_llm(
-                _sanitize_markdown(markdown_text), url, max_articles
+            articles_meta, prompt_tokens, completion_tokens = (
+                await _extract_articles_with_llm(
+                    _sanitize_markdown(markdown_text), url, max_articles
+                )
             )
-            logger.info(f"L'LLM ha estratto {len(articles_meta)} link ad articoli.")
+            logger.info("L'LLM ha estratto %d link ad articoli.", len(articles_meta))
 
             results = []
             for meta in articles_meta:
                 try:
-                    # Vai a prendere il contenuto completo dell'articolo
                     article_data = await _scrape_article_page(page, meta["url"])
 
-                    # Merge dei dati: se l'LLM ha trovato una thumbnail o data migliore, tienila,
-                    # altrimenti usa quella presa dalla pagina specifica.
                     article_data["title"] = meta.get("title") or article_data["title"]
                     if not article_data.get("published_date") and meta.get(
                         "published_date"
@@ -264,17 +276,23 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> list[dict]:
                     results.append(article_data)
                 except Exception as e:
                     logger.warning(
-                        f"Errore nello scraping del singolo articolo {meta['url']}: {e}"
+                        "Errore nello scraping del singolo articolo %s: %s",
+                        meta["url"],
+                        e,
                     )
 
-            return results
+            return ScrapeResult(
+                articles=results,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
 
         finally:
             await browser.close()
 
 
-async def scrape_article(url: str) -> dict:
-    """Entry point per scrapare un singolo articolo (usato dall'endpoint /scrape/article)."""
+async def scrape_article(url: str) -> ScrapeResult:
+    """Entry point per scrapare un singolo articolo (endpoint /scrape/article)."""
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
         context = await browser.new_context(
@@ -285,21 +303,17 @@ async def scrape_article(url: str) -> dict:
         )
         page = await context.new_page()
         try:
-            return await _scrape_article_page(page, url)
+            article = await _scrape_article_page(page, url)
+            return ScrapeResult(articles=[article])
         finally:
             await browser.close()
 
 
 async def _scrape_article_page(page: Page, url: str) -> dict:
-    """
-    Logica interna: apre un articolo ed estrae il contenuto pulito.
-    Usa MarkItDown per convertire l'HTML in Markdown.
-    Estrazione di metadati minimi (titolo, immagine) via LLM o logica base.
-    """
-    logger.info(f"Scraping articolo: {url}")
+    """Apre un articolo ed estrae il contenuto pulito via MarkItDown."""
+    logger.info("Scraping articolo: %s", url)
     await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
-    # Estrai HTML e converti
     html_content = await page.content()
 
     with tempfile.NamedTemporaryFile(
@@ -314,10 +328,8 @@ async def _scrape_article_page(page: Page, url: str) -> dict:
         if os.path.exists(temp_file):
             os.remove(temp_file)
 
-    # Pulisci whitespace multipli
     content = re.sub(r"\n{3,}", "\n\n", markdown_text)
 
-    # Raccogli metadati basici rimasti nella pagina
     title = await page.title()
     thumbnail_url = await page.evaluate("""() => {
         const og = document.querySelector("meta[property='og:image']");
@@ -326,7 +338,7 @@ async def _scrape_article_page(page: Page, url: str) -> dict:
 
     if len(content) > 8000:
         logger.warning(
-            f"Contenuto articolo troncato a 8000 chars (originale: {len(content)})"
+            "Contenuto articolo troncato a 8000 chars (originale: %d)", len(content)
         )
     return {
         "title": title.split("—")[0].strip() if "—" in title else title.strip(),

@@ -1,50 +1,56 @@
 """
-news-scraper — FastAPI microservice per scraping news da Diablo Immortal
+news-scraper — FastAPI microservice per scraping news
 Invocabile da n8n via HTTP POST /scrape
+Dashboard di monitoraggio su /ui/
 """
 
-import os
-import logging
 import asyncio
-import secrets
 import ipaddress
+import logging
+import secrets
 import sys
 import threading
+import time
+from contextlib import asynccontextmanager
+from typing import Optional
 from urllib.parse import urlparse
 
 # Fix per Windows: Playwright richiede ProactorEventLoop per gestire i sottoprocessi
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
-from contextlib import asynccontextmanager
-from typing import Optional
-from fastapi import FastAPI, HTTPException, Depends, Request, status
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import Depends, FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from fastapi.staticfiles import StaticFiles
+from nicegui import ui
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+
+from .config import config
+from . import metrics
+from .metrics import RequestRecord
 from .scraper import scrape_latest_news, scrape_article
+from .ui.router import router as ui_router, auth as ui_auth
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
-API_AUTH_TOKEN = os.getenv("API_AUTH_TOKEN")
-SCRAPE_TIMEOUT = float(os.getenv("SCRAPE_TIMEOUT", "300"))
-RATE_LIMIT = os.getenv("RATE_LIMIT", "20/minute")
 
 # Limits concurrent Playwright browser launches to prevent OOM
 BROWSER_SEMAPHORE = threading.Semaphore(3)
 
 
 def get_client_ip(request: Request) -> str:
-    cf_ip = request.headers.get("CF-Connecting-IP")  # Cloudflare
+    cf_ip = request.headers.get("CF-Connecting-IP")
     if cf_ip:
         return cf_ip
-    real_ip = request.headers.get("X-Real-IP")  # nginx
+    real_ip = request.headers.get("X-Real-IP")
     if real_ip:
         return real_ip
-    forwarded_for = request.headers.get("X-Forwarded-For")  # Apache / nginx
+    forwarded_for = request.headers.get("X-Forwarded-For")
     if forwarded_for:
         return forwarded_for.split(",")[0].strip()
     return request.client.host if request.client else "unknown"
@@ -56,10 +62,11 @@ limiter = Limiter(key_func=get_client_ip)
 def verify_token(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[str]:
-    """Verifica la validità del Bearer Token se impostato in ambiente."""
-    if API_AUTH_TOKEN:
+    """Verifica la validità del Bearer Token se impostato in configurazione."""
+    api_token = config.get("API_AUTH_TOKEN")
+    if api_token:
         if credentials is None or not secrets.compare_digest(
-            credentials.credentials, API_AUTH_TOKEN
+            credentials.credentials, api_token
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -82,7 +89,7 @@ def _validate_url(v: str) -> str:
     try:
         addr = ipaddress.ip_address(host)
     except ValueError:
-        pass  # domain name, not an IP address — allowed
+        pass
     else:
         if (
             addr.is_private
@@ -96,7 +103,8 @@ def _validate_url(v: str) -> str:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Auto-installazione di Playwright Chromium all'avvio
+    await metrics.init_db()
+
     try:
         import subprocess
 
@@ -110,15 +118,15 @@ async def lifespan(app: FastAPI):
         logger.info("Playwright Chromium pronto.")
     except Exception as e:
         logger.warning(
-            f"Installazione automatica Playwright fallita (continua comunque): {e}"
+            "Installazione automatica Playwright fallita (continua comunque): %s", e
         )
     yield
 
 
 app = FastAPI(
     title="news-scraper",
-    description="Scraping news Diablo Immortal per n8n",
-    version="1.0.0",
+    description="Scraping news per n8n · Dashboard su /ui/",
+    version="1.1.0",
     lifespan=lifespan,
     docs_url=None,
     redoc_url=None,
@@ -127,6 +135,35 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
+
+# --- Auth middleware for /ui/* ---
+
+_UI_SOCKET_PREFIX = "/ui/socket.io"
+
+@app.middleware("http")
+async def ui_auth_gate(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/ui"):
+        return await call_next(request)
+    # Allow NiceGUI WebSocket/socket.io — auth is enforced at page level
+    if path.startswith(_UI_SOCKET_PREFIX):
+        return await call_next(request)
+    token = request.cookies.get(ui_auth.cookie_name, "")
+    if ui_auth.verify_token(token):
+        return await call_next(request)
+    if "websocket" in request.headers.get("upgrade", "").lower():
+        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    return RedirectResponse(url="/login", status_code=302)
+
+
+# --- Static files ---
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+# --- UI login/logout router ---
+app.include_router(ui_router)
+
+
+# --- Pydantic models ---
 
 class ScrapeRequest(BaseModel):
     url: str = "https://diabloimmortal.blizzard.com/en-us#news"
@@ -155,6 +192,8 @@ class ArticleRequest(BaseModel):
         return _validate_url(v)
 
 
+# --- Scraping endpoints ---
+
 @app.get("/health")
 @limiter.limit("100/minute")
 async def health(request: Request):
@@ -162,46 +201,72 @@ async def health(request: Request):
 
 
 @app.post("/scrape", response_model=list[ArticleResult])
-@limiter.limit(RATE_LIMIT)
+@limiter.limit(lambda: config.get("RATE_LIMIT", "20/minute"))
 def scrape(
     request: Request,
     req: ScrapeRequest,
     token: Optional[str] = Depends(verify_token),
 ):
     """
-    Scrapa la pagina principale e restituisce le ultime N notizie
-    (default: solo l'ultima). Il contenuto grezzo è pronto per
-    essere passato all'LLM node di n8n per il riassunto.
+    Scrapa la pagina principale e restituisce le ultime N notizie.
     """
-    logger.info(f"Scraping: {req.url} (max {req.max_articles})")
+    logger.info("Scraping: %s (max %d)", req.url, req.max_articles)
 
     with BROWSER_SEMAPHORE:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        try:
-            articles = loop.run_until_complete(
-                asyncio.wait_for(
+        async def _run():
+            start = time.time()
+            result = None
+            status_str = "ok"
+            error_msg: Optional[str] = None
+            http_exc: Optional[HTTPException] = None
+
+            try:
+                result = await asyncio.wait_for(
                     scrape_latest_news(req.url, req.max_articles),
-                    timeout=SCRAPE_TIMEOUT,
+                    timeout=config.get_float("SCRAPE_TIMEOUT", 300),
                 )
-            )
-            if not articles:
-                raise HTTPException(status_code=404, detail="Nessuna news trovata")
-            return articles
-        except HTTPException:
-            raise
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Scraping timeout")
-        except Exception as e:
-            logger.error(f"Errore scraping: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error") from e
+                if not result.articles:
+                    status_str = "error"
+                    error_msg = "Nessuna news trovata"
+                    http_exc = HTTPException(status_code=404, detail="Nessuna news trovata")
+            except asyncio.TimeoutError:
+                status_str = "timeout"
+            except Exception as e:
+                status_str = "error"
+                error_msg = str(e)
+                logger.error("Errore scraping: %s", e)
+            finally:
+                await metrics.record(
+                    RequestRecord(
+                        endpoint="/scrape",
+                        url=req.url,
+                        status=status_str,
+                        duration=time.time() - start,
+                        error_msg=error_msg,
+                        prompt_tokens=result.prompt_tokens if result else 0,
+                        completion_tokens=result.completion_tokens if result else 0,
+                    )
+                )
+
+            if status_str == "timeout":
+                raise HTTPException(status_code=504, detail="Scraping timeout")
+            if http_exc:
+                raise http_exc
+            if status_str == "error":
+                raise HTTPException(status_code=500, detail="Internal server error")
+            return result.articles  # type: ignore[union-attr]
+
+        try:
+            return loop.run_until_complete(_run())
         finally:
             loop.close()
 
 
 @app.post("/scrape/article", response_model=ArticleResult)
-@limiter.limit(RATE_LIMIT)
+@limiter.limit(lambda: config.get("RATE_LIMIT", "20/minute"))
 def scrape_single(
     request: Request,
     req: ArticleRequest,
@@ -209,20 +274,53 @@ def scrape_single(
 ):
     """
     Scrapa un singolo articolo dato il suo URL.
-    Utile per test o per riprocessare un articolo già noto.
     """
     with BROWSER_SEMAPHORE:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
+        async def _run():
+            start = time.time()
+            result = None
+            status_str = "ok"
+            error_msg: Optional[str] = None
+
+            try:
+                result = await asyncio.wait_for(
+                    scrape_article(req.url),
+                    timeout=config.get_float("SCRAPE_TIMEOUT", 300),
+                )
+            except asyncio.TimeoutError:
+                status_str = "timeout"
+            except Exception as e:
+                status_str = "error"
+                error_msg = str(e)
+                logger.error("Errore scraping articolo: %s", e)
+            finally:
+                await metrics.record(
+                    RequestRecord(
+                        endpoint="/scrape/article",
+                        url=req.url,
+                        status=status_str,
+                        duration=time.time() - start,
+                        error_msg=error_msg,
+                    )
+                )
+
+            if status_str == "timeout":
+                raise HTTPException(status_code=504, detail="Scraping timeout")
+            if status_str == "error":
+                raise HTTPException(status_code=500, detail="Internal server error")
+            return result.articles[0]  # type: ignore[union-attr]
+
         try:
-            return loop.run_until_complete(
-                asyncio.wait_for(scrape_article(req.url), timeout=SCRAPE_TIMEOUT)
-            )
-        except asyncio.TimeoutError:
-            raise HTTPException(status_code=504, detail="Scraping timeout")
-        except Exception as e:
-            logger.error(f"Errore scraping articolo: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error") from e
+            return loop.run_until_complete(_run())
         finally:
             loop.close()
+
+
+# --- NiceGUI mount ---
+from .ui import pages as _ui_pages  # noqa: F401 — registers @ui.page decorators
+
+_fastapi_app = app  # keep explicit reference before ui.run_with shadows nothing
+ui.run_with(_fastapi_app, mount_path="/ui", storage_secret=ui_auth._secret + "_ng")

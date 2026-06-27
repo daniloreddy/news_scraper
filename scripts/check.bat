@@ -1,7 +1,23 @@
 @echo off
 setlocal
+SET "SCRIPTS_DIR=%~dp0"
+SET "ROOT_DIR=%SCRIPTS_DIR%.."
+CD /D "%ROOT_DIR%"
 
-set VENV=.venv\Scripts
+IF EXIST venv GOTO ACTIVATE
+
+echo [INFO] Creating virtual environment...
+python -m venv venv
+CALL venv\Scripts\activate.bat
+echo [INFO] Installing dependencies...
+pip install -r requirements.txt
+GOTO CHECK
+
+:ACTIVATE
+CALL venv\Scripts\activate.bat
+
+:CHECK
+set VENV=venv\Scripts
 
 echo [1/4] ruff format ...
 %VENV%\ruff format app tests
