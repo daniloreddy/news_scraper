@@ -41,14 +41,10 @@ The microservice utilizes a **Smart/LLM-based Scraping** approach that is comple
 ## Quick Start with Docker
 
 > Requirement: **Docker** with the Compose plugin installed. No need to clone the project.
+>
+> Create an empty folder. You only need to add two files — everything else (`data/`, `debug/`) is created automatically.
 
-**1. Download the Compose file and set the dashboard password**
-
-```bash
-python scripts/set_ui_password.py
-```
-
-**2. Download the Compose file**
+**1. Download the Compose file**
 
 ```bash
 curl -O https://raw.githubusercontent.com/daniloreddy/news_scraper/main/docker-compose.yml
@@ -82,6 +78,7 @@ docker exec -it news-scraper python scripts/set_ui_password.py
 ```
 
 The service will be available at `http://localhost:8088`.
+The monitoring dashboard is at `http://localhost:8088/ui/`.
 
 **Update image**
 
