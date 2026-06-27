@@ -9,6 +9,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Codice applicazione
 COPY app/ ./app/
+COPY static/ ./static/
 
 # Playwright: installa solo Chromium (più leggero)
 RUN playwright install chromium --with-deps
