@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **First-run setup (set dashboard password):**
 ```
-venv\Scripts\python scripts\set_ui_password.py
+venv\Scripts\python scripts\set_password.py
 ```
 
 **Run locally (Windows):**

@@ -74,7 +74,7 @@ docker compose up -d
 **4. Set the dashboard password** (first run only)
 
 ```bash
-docker exec -it news-scraper python scripts/set_ui_password.py
+docker exec -it news-scraper python scripts/set_password.py
 ```
 
 The service will be available at `http://localhost:8088`.
