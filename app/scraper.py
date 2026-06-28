@@ -93,7 +93,9 @@ def _preprocess_html(html_content: str, base_url: str) -> str:
 
 class ArticleExtraction(BaseModel):
     title: str = PydanticField(description="Titolo della notizia o dell'articolo.")
-    url: str = PydanticField(description="URL assoluto completo che porta all'articolo.")
+    url: str = PydanticField(
+        description="URL assoluto completo che porta all'articolo."
+    )
     published_date: Optional[str] = PydanticField(
         description="Data di pubblicazione estratta, se presente.", default=None
     )
@@ -138,7 +140,9 @@ async def _call_llm_api(messages: list) -> _LLMResult:
             err_msg = err_body.get("error", {}).get("message") or resp.text
         except Exception:
             err_msg = resp.text[:300]
-        logger.error("LLM %s %s: %s", resp.status_code, config.get("LLM_BASE_URL"), err_msg)
+        logger.error(
+            "LLM %s %s: %s", resp.status_code, config.get("LLM_BASE_URL"), err_msg
+        )
         resp.raise_for_status()
 
     data = resp.json()
@@ -251,10 +255,12 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> ScrapeResult:
                 if os.path.exists(temp_file):
                     os.remove(temp_file)
 
-            articles_meta, prompt_tokens, completion_tokens = (
-                await _extract_articles_with_llm(
-                    _sanitize_markdown(markdown_text), url, max_articles
-                )
+            (
+                articles_meta,
+                prompt_tokens,
+                completion_tokens,
+            ) = await _extract_articles_with_llm(
+                _sanitize_markdown(markdown_text), url, max_articles
             )
             logger.info("L'LLM ha estratto %d link ad articoli.", len(articles_meta))
 

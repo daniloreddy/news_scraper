@@ -98,7 +98,7 @@ docker compose down
 
 > Only needed to modify the source code.
 
-**Requirements**: Docker, Python 3.9+
+**Requirements**: Docker, Python 3.12+
 
 ```bash
 git clone https://github.com/daniloreddy/news_scraper.git news-scraper
@@ -151,5 +151,3 @@ Simply invoke the `/scrape` endpoint and pass any target site's URL in the JSON 
 ```
 
 The system will automatically download, convert, and parse the target news page correctly using its LLM intelligence.
-
-For integration instructions with n8n, WordPress, and Telegram, refer to [INTEGRATIONS.md](INTEGRATIONS.md).

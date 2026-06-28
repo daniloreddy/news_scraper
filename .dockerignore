@@ -4,6 +4,7 @@
 .nicegui/
 data/
 debug/
+logs/
 venv/
 .venv/
 __pycache__/

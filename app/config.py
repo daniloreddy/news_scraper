@@ -22,6 +22,8 @@ _DEFAULTS: dict[str, str] = {
     "SCRAPE_TIMEOUT": "300",
     "RATE_LIMIT": "20/minute",
     "DEBUG": "false",
+    "REFRESH_ENABLED": "true",
+    "REFRESH_INTERVAL": "30",
 }
 
 _OVERRIDE_FILE = Path("data/config.json")
@@ -34,12 +36,14 @@ class ConfigManager:
     """Single source of truth for runtime config. Singleton."""
 
     _instance: Optional["ConfigManager"] = None
+    _cache: dict[str, str]
+    _http_client: Optional[httpx.AsyncClient]
 
     def __new__(cls) -> "ConfigManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
-            cls._instance._cache: dict[str, str] = {}
-            cls._instance._http_client: Optional[httpx.AsyncClient] = None
+            cls._instance._cache = {}
+            cls._instance._http_client = None
             cls._instance._load()
         return cls._instance
 
@@ -129,6 +133,7 @@ class ConfigManager:
             # Close old client without awaiting (sync context — best effort)
             try:
                 import asyncio
+
                 loop = asyncio.get_event_loop()
                 if not loop.is_closed():
                     loop.create_task(self._http_client.aclose())

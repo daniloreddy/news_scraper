@@ -78,7 +78,7 @@ async def get_stats(hours: int = 24) -> dict:
         async with db.execute(
             "SELECT * FROM requests WHERE ts >= ? ORDER BY ts DESC", (since,)
         ) as cur:
-            rows = await cur.fetchall()
+            rows = list(await cur.fetchall())
 
     total = len(rows)
     ok = sum(1 for r in rows if r["status"] == "ok")

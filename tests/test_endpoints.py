@@ -3,6 +3,8 @@
 import asyncio
 from unittest.mock import patch, AsyncMock
 
+from app.scraper import ScrapeResult
+
 
 SAMPLE_ARTICLE = {
     "title": "Test Article",
@@ -33,7 +35,8 @@ class TestHealth:
 class TestScrapeEndpoint:
     def test_success_returns_article_list(self, client):
         with patch(
-            "app.main.scrape_latest_news", new=AsyncMock(return_value=[SAMPLE_ARTICLE])
+            "app.main.scrape_latest_news",
+            new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ):
             response = client.post(
                 "/scrape", json={"url": "https://example.com", "max_articles": 1}
@@ -46,7 +49,8 @@ class TestScrapeEndpoint:
 
     def test_default_values_used_when_body_empty(self, client):
         with patch(
-            "app.main.scrape_latest_news", new=AsyncMock(return_value=[SAMPLE_ARTICLE])
+            "app.main.scrape_latest_news",
+            new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ) as mock:
             response = client.post("/scrape", json={})
         assert response.status_code == 200
@@ -55,7 +59,10 @@ class TestScrapeEndpoint:
         )
 
     def test_no_articles_found_returns_404(self, client):
-        with patch("app.main.scrape_latest_news", new=AsyncMock(return_value=[])):
+        with patch(
+            "app.main.scrape_latest_news",
+            new=AsyncMock(return_value=ScrapeResult(articles=[])),
+        ):
             response = client.post("/scrape", json={"url": "https://example.com"})
         assert response.status_code == 404
 
@@ -87,7 +94,7 @@ class TestScrapeEndpoint:
         }
         with patch(
             "app.main.scrape_latest_news",
-            new=AsyncMock(return_value=[SAMPLE_ARTICLE, second]),
+            new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE, second])),
         ):
             response = client.post(
                 "/scrape", json={"url": "https://example.com", "max_articles": 2}
@@ -104,7 +111,8 @@ class TestScrapeEndpoint:
 class TestScrapeArticleEndpoint:
     def test_success(self, client):
         with patch(
-            "app.main.scrape_article", new=AsyncMock(return_value=SAMPLE_ARTICLE)
+            "app.main.scrape_article",
+            new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ):
             response = client.post(
                 "/scrape/article", json={"url": "https://example.com/article/1"}
@@ -141,7 +149,8 @@ class TestScrapeArticleEndpoint:
 
     def test_response_shape_matches_article_result_model(self, client):
         with patch(
-            "app.main.scrape_article", new=AsyncMock(return_value=SAMPLE_ARTICLE)
+            "app.main.scrape_article",
+            new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ):
             response = client.post(
                 "/scrape/article", json={"url": "https://example.com"}
@@ -205,7 +214,7 @@ class TestAuthentication:
         with patch("app.main.API_AUTH_TOKEN", None):
             with patch(
                 "app.main.scrape_latest_news",
-                new=AsyncMock(return_value=[SAMPLE_ARTICLE]),
+                new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
             ):
                 response = client.post("/scrape", json={"url": "https://example.com"})
         assert response.status_code == 200
@@ -228,7 +237,7 @@ class TestAuthentication:
         with patch("app.main.API_AUTH_TOKEN", "mysecret"):
             with patch(
                 "app.main.scrape_latest_news",
-                new=AsyncMock(return_value=[SAMPLE_ARTICLE]),
+                new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
             ):
                 response = client.post(
                     "/scrape",
@@ -265,7 +274,8 @@ class TestRateLimiting:
     def test_scrape_returns_429_after_limit_exceeded(self, client):
         headers = {"X-Real-IP": self._SCRAPE_IP}
         with patch(
-            "app.main.scrape_latest_news", new=AsyncMock(return_value=[SAMPLE_ARTICLE])
+            "app.main.scrape_latest_news",
+            new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ):
             for _ in range(20):
                 client.post(
@@ -294,10 +304,9 @@ class TestPublishedDate:
         with patch(
             "app.main.scrape_article",
             new=AsyncMock(
-                return_value={
-                    **SAMPLE_ARTICLE,
-                    "published_date": None,
-                }
+                return_value=ScrapeResult(
+                    articles=[{**SAMPLE_ARTICLE, "published_date": None}]
+                )
             ),
         ):
             response = client.post(
@@ -310,12 +319,9 @@ class TestPublishedDate:
         with patch(
             "app.main.scrape_latest_news",
             new=AsyncMock(
-                return_value=[
-                    {
-                        **SAMPLE_ARTICLE,
-                        "published_date": "2026-06-12",
-                    }
-                ]
+                return_value=ScrapeResult(
+                    articles=[{**SAMPLE_ARTICLE, "published_date": "2026-06-12"}]
+                )
             ),
         ):
             response = client.post("/scrape", json={"url": "https://example.com"})

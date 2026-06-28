@@ -15,8 +15,8 @@ from .router import auth
 
 _APP_NAME: str = "News Scraper"
 _NAV_ITEMS: list[tuple[str, str, str]] = [
-    ("Dashboard",      "dashboard", "/"),
-    ("Configurazione", "settings",  "/config"),
+    ("Dashboard", "dashboard", "/"),
+    ("Configurazione", "settings", "/config"),
 ]
 
 
@@ -59,16 +59,22 @@ def _header(
 
         for label, icon, path in nav_items:
             if label.lower() != current.lower():
-                ui.button(icon=icon, on_click=lambda p=path: ui.navigate.to(p)).props("flat color=white round").tooltip(label)
+                ui.button(icon=icon, on_click=lambda p=path: ui.navigate.to(p)).props(
+                    "flat color=white round"
+                ).tooltip(label)
 
         if extra_actions is not None:
             extra_actions()
 
         if dark is not None:
+
             def _toggle_dark() -> None:
                 dark.toggle()
                 ng_app.storage.user["dark_mode"] = dark.value
-            ui.button(icon="contrast", on_click=_toggle_dark).props("flat round dense color=white").tooltip("Dark / Light")
+
+            ui.button(icon="contrast", on_click=_toggle_dark).props(
+                "flat round dense color=white"
+            ).tooltip("Dark / Light")
 
         ui.label(_APP_NAME).classes("text-body2").style("opacity:0.6")
 
@@ -84,7 +90,13 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
         return RedirectResponse("/login")
 
     dark = _page_setup("Dashboard")
-    _header("Dashboard", _NAV_ITEMS, current="Dashboard", dark=dark, extra_actions=_logout_action)
+    _header(
+        "Dashboard",
+        _NAV_ITEMS,
+        current="Dashboard",
+        dark=dark,
+        extra_actions=_logout_action,
+    )
 
     with ui.column().style("width:100%; padding:1.25rem; gap:1rem; overflow:auto;"):
         ui.label("Dashboard").classes("text-h6")
@@ -93,7 +105,11 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
         ui.separator()
         history_label = ui.label("").classes("text-subtitle2 text-grey-6")
         history_wrap = ui.column().style("width:100%;")
-        refresh_label = ui.label("").classes("text-caption text-grey-6 q-mt-sm")
+        refresh_label = (
+            ui.label("")
+            .classes("text-caption text-grey-6")
+            .style("text-align:right; width:100%")
+        )
 
         async def refresh() -> None:
             stats = await mdb.get_stats(hours=24)
@@ -106,7 +122,9 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
                 _metric_card("Errori", str(stats["errors"]), "negative")
                 _metric_card("Durata media", f"{stats['avg_duration_s']}s")
                 _metric_card("Token prompt", str(stats["prompt_tokens"]), "warning")
-                _metric_card("Token completion", str(stats["completion_tokens"]), "info")
+                _metric_card(
+                    "Token completion", str(stats["completion_tokens"]), "info"
+                )
 
             history_label.set_text(
                 f"Storico richieste ({len(history)} record più recenti)"
@@ -115,25 +133,54 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
             history_wrap.clear()
             with history_wrap:
                 cols = [
-                    {"name": "ts",       "label": "Timestamp",  "field": "ts",       "align": "left"},
-                    {"name": "endpoint", "label": "Endpoint",   "field": "endpoint", "align": "left"},
-                    {"name": "url",      "label": "URL",        "field": "url",      "align": "left"},
-                    {"name": "status",   "label": "Status",     "field": "status",   "align": "center"},
-                    {"name": "duration", "label": "Durata (s)", "field": "duration", "align": "right"},
-                    {"name": "tokens",   "label": "Tokens p/c", "field": "tokens",   "align": "right"},
+                    {
+                        "name": "ts",
+                        "label": "Timestamp",
+                        "field": "ts",
+                        "align": "left",
+                    },
+                    {
+                        "name": "endpoint",
+                        "label": "Endpoint",
+                        "field": "endpoint",
+                        "align": "left",
+                    },
+                    {"name": "url", "label": "URL", "field": "url", "align": "left"},
+                    {
+                        "name": "status",
+                        "label": "Status",
+                        "field": "status",
+                        "align": "center",
+                    },
+                    {
+                        "name": "duration",
+                        "label": "Durata (s)",
+                        "field": "duration",
+                        "align": "right",
+                    },
+                    {
+                        "name": "tokens",
+                        "label": "Tokens p/c",
+                        "field": "tokens",
+                        "align": "right",
+                    },
                 ]
                 rows = []
                 for r in history:
                     raw_url = r["url"] or ""
                     short_url = (raw_url[:55] + "…") if len(raw_url) > 55 else raw_url
-                    rows.append({
-                        "ts":       _fmt_ts(r["ts"]),
-                        "endpoint": r["endpoint"],
-                        "url":      short_url,
-                        "status":   r["status"],
-                        "duration": f"{r['duration']:.1f}" if r["duration"] else "—",
-                        "tokens":   f"{r['prompt_tokens'] or 0}/{r['completion_tokens'] or 0}",
-                    })
+                    rows.append(
+                        {
+                            "ts": _fmt_ts(r["ts"]),
+                            "endpoint": r["endpoint"],
+                            "url": short_url,
+                            "status": r["status"],
+                            "duration": f"{r['duration']:.1f}"
+                            if r["duration"]
+                            else "—",
+                            "tokens": f"{r['prompt_tokens'] or 0}/{r['completion_tokens'] or 0}",
+                        }
+                    )
                 tbl = ui.table(columns=cols, rows=rows).classes("full-width")
                 tbl.add_slot(
                     "body-cell-status",
@@ -149,10 +196,14 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
                 tbl.run_method("$forceUpdate")
 
             now = datetime.datetime.now().strftime("%H:%M:%S")
-            refresh_label.set_text(f"Aggiornato: {now} · auto-refresh 30s")
+            interval = config.get_int("REFRESH_INTERVAL", 30)
+            refresh_label.set_text(f"Aggiornato: {now} · auto-refresh {interval}s")
 
         await refresh()
-        ui.timer(30, refresh)
+        if config.get_bool("REFRESH_ENABLED"):
+            ui.timer(config.get_int("REFRESH_INTERVAL", 30), refresh)
+        else:
+            refresh_label.set_text("auto-refresh disabilitato")
 
     _footer()
     return None
@@ -164,9 +215,17 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
         return RedirectResponse("/login")
 
     dark = _page_setup("Configurazione")
-    _header("Configurazione", _NAV_ITEMS, current="Configurazione", dark=dark, extra_actions=_logout_action)
+    _header(
+        "Configurazione",
+        _NAV_ITEMS,
+        current="Configurazione",
+        dark=dark,
+        extra_actions=_logout_action,
+    )
 
-    with ui.column().style("width:100%; max-width:720px; margin:0 auto; padding:1.25rem; gap:0.75rem;"):
+    with ui.column().style(
+        "width:100%; max-width:720px; margin:0 auto; padding:1.25rem; gap:0.75rem;"
+    ):
         ui.label("Configurazione").classes("text-h6")
         with ui.row().classes("items-center q-gutter-sm"):
             ui.label("Legenda:").classes("text-caption text-grey-6")
@@ -185,17 +244,33 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                 ui.badge("hot-reload").props("color=positive")
             ui.separator().classes("q-mb-sm")
 
-            inp_base_url = ui.input("Base URL", value=cur.get("LLM_BASE_URL", "")).classes("full-width")
-            inp_api_key = ui.input(
-                "API Key", value="", placeholder="lascia vuoto per mantenere"
-            ).classes("full-width").props("type=password")
-            inp_model = ui.input("Modello", value=cur.get("LLM_MODEL", "")).classes("full-width")
+            inp_base_url = ui.input(
+                "Base URL", value=cur.get("LLM_BASE_URL", "")
+            ).classes("full-width")
+            inp_api_key = (
+                ui.input("API Key", value="", placeholder="lascia vuoto per mantenere")
+                .classes("full-width")
+                .props("type=password")
+            )
+            inp_model = ui.input("Modello", value=cur.get("LLM_MODEL", "")).classes(
+                "full-width"
+            )
             with ui.row().classes("full-width q-gutter-sm"):
-                inp_temp = ui.input("Temperature", value=cur.get("LLM_TEMPERATURE", "")).style("flex:1;")
-                inp_llm_timeout = ui.input("Timeout LLM (s)", value=cur.get("LLM_TIMEOUT", "")).style("flex:1;")
-            inp_max_prompt = ui.input(
-                "Max prompt chars", value=cur.get("LLM_MAX_PROMPT_CHARS", "8000")
-            ).classes("full-width").props('hint="Tronca il markdown inviato all\'LLM. Riduci se il server rifiuta con context exceeded."')
+                inp_temp = ui.input(
+                    "Temperature", value=cur.get("LLM_TEMPERATURE", "")
+                ).style("flex:1;")
+                inp_llm_timeout = ui.input(
+                    "Timeout LLM (s)", value=cur.get("LLM_TIMEOUT", "")
+                ).style("flex:1;")
+            inp_max_prompt = (
+                ui.input(
+                    "Max prompt chars", value=cur.get("LLM_MAX_PROMPT_CHARS", "8000")
+                )
+                .classes("full-width")
+                .props(
+                    'hint="Tronca il markdown inviato all\'LLM. Riduci se il server rifiuta con context exceeded."'
+                )
+            )
 
         with ui.card().classes("q-pa-md full-width"):
             with ui.row().classes("items-center q-mb-xs"):
@@ -214,6 +289,26 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
 
         with ui.card().classes("q-pa-md full-width"):
             with ui.row().classes("items-center q-mb-xs"):
+                ui.label("Interfaccia").classes("text-caption text-grey-6 text-uppercase")
+                ui.space()
+                ui.badge("hot-reload").props("color=positive")
+            ui.separator().classes("q-mb-sm")
+
+            refresh_switch = ui.switch(
+                "Auto-refresh abilitato",
+                value=cur.get("REFRESH_ENABLED", "true").lower() == "true",
+            ).classes("q-mb-sm")
+            inp_refresh = (
+                ui.input(
+                    "Intervallo auto-refresh (s)",
+                    value=cur.get("REFRESH_INTERVAL", "30"),
+                )
+                .classes("full-width")
+                .props('hint="Secondi tra un aggiornamento automatico e il successivo"')
+            )
+
+        with ui.card().classes("q-pa-md full-width"):
+            with ui.row().classes("items-center q-mb-xs"):
                 ui.label("API").classes("text-caption text-grey-6 text-uppercase")
                 ui.space()
                 ui.badge("hot-reload").props("color=positive")
@@ -222,30 +317,44 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
             with ui.row().classes("items-center q-gutter-sm q-mb-xs"):
                 ui.label("Rate Limit").classes("text-caption text-grey-6")
                 ui.badge("richiede restart").props("color=warning")
-            inp_rate_limit = ui.input("Rate Limit", value=cur.get("RATE_LIMIT", "")).classes("full-width")
-            ui.label("Formato: N/second|minute|hour").classes("text-caption text-grey-6 q-mb-sm")
-            inp_auth_token = ui.input(
-                "Auth Token API", value="", placeholder="lascia vuoto per mantenere"
-            ).classes("full-width").props("type=password")
+            inp_rate_limit = ui.input(
+                "Rate Limit", value=cur.get("RATE_LIMIT", "")
+            ).classes("full-width")
+            ui.label("Formato: N/second|minute|hour").classes(
+                "text-caption text-grey-6 q-mb-sm"
+            )
+            inp_auth_token = (
+                ui.input(
+                    "Auth Token API", value="", placeholder="lascia vuoto per mantenere"
+                )
+                .classes("full-width")
+                .props("type=password")
+            )
 
         async def save() -> None:
-            config.update_many({
-                "LLM_BASE_URL":         inp_base_url.value,
-                "LLM_API_KEY":          inp_api_key.value,
-                "LLM_MODEL":            inp_model.value,
-                "LLM_TEMPERATURE":      inp_temp.value,
-                "LLM_TIMEOUT":          inp_llm_timeout.value,
-                "LLM_MAX_PROMPT_CHARS": inp_max_prompt.value,
-                "SCRAPE_TIMEOUT":       inp_scrape_timeout.value,
-                "DEBUG":                "true" if debug_switch.value else "false",
-                "RATE_LIMIT":           inp_rate_limit.value,
-                "API_AUTH_TOKEN":       inp_auth_token.value,
-            })
+            config.update_many(
+                {
+                    "LLM_BASE_URL": inp_base_url.value,
+                    "LLM_API_KEY": inp_api_key.value,
+                    "LLM_MODEL": inp_model.value,
+                    "LLM_TEMPERATURE": inp_temp.value,
+                    "LLM_TIMEOUT": inp_llm_timeout.value,
+                    "LLM_MAX_PROMPT_CHARS": inp_max_prompt.value,
+                    "SCRAPE_TIMEOUT": inp_scrape_timeout.value,
+                    "DEBUG": "true" if debug_switch.value else "false",
+                    "REFRESH_ENABLED": "true" if refresh_switch.value else "false",
+                    "REFRESH_INTERVAL": inp_refresh.value,
+                    "RATE_LIMIT": inp_rate_limit.value,
+                    "API_AUTH_TOKEN": inp_auth_token.value,
+                }
+            )
             inp_api_key.set_value("")
             inp_auth_token.set_value("")
             ui.notify("Configurazione salvata", type="positive", position="top")
 
-        ui.button("Salva", icon="save", on_click=save).props("color=primary").classes("q-mt-sm")
+        ui.button("Salva", icon="save", on_click=save).props("color=primary").classes(
+            "q-mt-sm"
+        )
 
     _footer()
     return None

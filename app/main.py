@@ -42,6 +42,9 @@ security = HTTPBearer(auto_error=False)
 # Limits concurrent Playwright browser launches to prevent OOM
 BROWSER_SEMAPHORE = threading.Semaphore(3)
 
+# Module-level so tests can patch it
+API_AUTH_TOKEN: Optional[str] = config.get("API_AUTH_TOKEN") or None
+
 
 def get_client_ip(request: Request) -> str:
     cf_ip = request.headers.get("CF-Connecting-IP")
@@ -63,10 +66,9 @@ def verify_token(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[str]:
     """Verifica la validità del Bearer Token se impostato in configurazione."""
-    api_token = config.get("API_AUTH_TOKEN")
-    if api_token:
+    if API_AUTH_TOKEN:
         if credentials is None or not secrets.compare_digest(
-            credentials.credentials, api_token
+            credentials.credentials, API_AUTH_TOKEN
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -140,6 +142,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 
 _UI_SOCKET_PREFIX = "/ui/socket.io"
 
+
 @app.middleware("http")
 async def ui_auth_gate(request: Request, call_next):
     path = request.url.path
@@ -164,6 +167,7 @@ app.include_router(ui_router)
 
 
 # --- Pydantic models ---
+
 
 class ScrapeRequest(BaseModel):
     url: str = "https://diabloimmortal.blizzard.com/en-us#news"
@@ -193,6 +197,7 @@ class ArticleRequest(BaseModel):
 
 
 # --- Scraping endpoints ---
+
 
 @app.get("/health")
 @limiter.limit("100/minute")
@@ -231,7 +236,9 @@ def scrape(
                 if not result.articles:
                     status_str = "error"
                     error_msg = "Nessuna news trovata"
-                    http_exc = HTTPException(status_code=404, detail="Nessuna news trovata")
+                    http_exc = HTTPException(
+                        status_code=404, detail="Nessuna news trovata"
+                    )
             except asyncio.TimeoutError:
                 status_str = "timeout"
             except Exception as e:
@@ -320,7 +327,7 @@ def scrape_single(
 
 
 # --- NiceGUI mount ---
-from .ui import pages as _ui_pages  # noqa: F401 — registers @ui.page decorators
+from .ui import pages as _ui_pages  # noqa: F401, E402 — registers @ui.page decorators; must follow app init
 
 _fastapi_app = app  # keep explicit reference before ui.run_with shadows nothing
 ui.run_with(_fastapi_app, mount_path="/ui", storage_secret=ui_auth._secret + "_ng")
