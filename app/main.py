@@ -7,6 +7,7 @@ Dashboard di monitoraggio su /ui/
 import asyncio
 import ipaddress
 import logging
+import os
 import secrets
 import sys
 import threading
@@ -46,17 +47,27 @@ BROWSER_SEMAPHORE = threading.Semaphore(3)
 API_AUTH_TOKEN: Optional[str] = config.get("API_AUTH_TOKEN") or None
 
 
+def _trusted_proxies() -> set[str]:
+    raw = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
+    return {p.strip() for p in raw.split(",") if p.strip()}
+
+
 def get_client_ip(request: Request) -> str:
-    cf_ip = request.headers.get("CF-Connecting-IP")
-    if cf_ip:
-        return cf_ip
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    return request.client.host if request.client else "unknown"
+    """Resolve the real client IP. Forwarded headers are only trusted when the
+    direct connection comes from a known reverse proxy (TRUSTED_PROXIES), otherwise
+    clients could spoof them to bypass per-IP rate limiting."""
+    host = request.client.host if request.client else ""
+    if host in _trusted_proxies():
+        cf_ip = request.headers.get("CF-Connecting-IP")
+        if cf_ip:
+            return cf_ip
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+    return host or "unknown"
 
 
 limiter = Limiter(key_func=get_client_ip)
@@ -103,9 +114,16 @@ def _validate_url(v: str) -> str:
     return v
 
 
+async def _purge_ui_auth_blocks_periodically() -> None:
+    while True:
+        await asyncio.sleep(600)
+        ui_auth.purge_expired_blocks()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await metrics.init_db()
+    purge_task = asyncio.create_task(_purge_ui_auth_blocks_periodically())
 
     try:
         import subprocess
@@ -123,6 +141,7 @@ async def lifespan(app: FastAPI):
             "Installazione automatica Playwright fallita (continua comunque): %s", e
         )
     yield
+    purge_task.cancel()
 
 
 app = FastAPI(

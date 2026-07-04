@@ -16,5 +16,8 @@ def client():
     # non-auth tests; auth-specific tests patch it themselves per test.
     with patch("subprocess.run"):
         with patch("app.main.API_AUTH_TOKEN", None):
-            with TestClient(app) as c:
+            # client=("127.0.0.1", ...) simulates the documented default deployment
+            # (reverse proxy / Cloudflare Tunnel on localhost) so forwarded-IP
+            # headers set by tests are trusted, per TRUSTED_PROXIES default.
+            with TestClient(app, client=("127.0.0.1", 123)) as c:
                 yield c

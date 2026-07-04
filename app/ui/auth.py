@@ -50,6 +50,15 @@ class _RateLimit:
             return "Troppi tentativi dal tuo IP — riprova tra 5 minuti"
         return None
 
+    def purge_expired(self) -> None:
+        """Drop IP entries whose window has expired, so the dict doesn't grow forever."""
+        now = time.time()
+        expired = [
+            ip for ip, (_, since) in self._ip.items() if now - since > self._per_ip_win
+        ]
+        for ip in expired:
+            del self._ip[ip]
+
 
 class AuthManager:
     def __init__(
@@ -123,12 +132,22 @@ class AuthManager:
         except Exception:
             return False
 
+    def _trusted_proxies(self) -> set[str]:
+        raw = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
+        return {p.strip() for p in raw.split(",") if p.strip()}
+
     def _client_ip(self, request: Request) -> str:
-        for header in ("cf-connecting-ip", "x-real-ip", "x-forwarded-for"):
-            v = request.headers.get(header, "")
-            if v:
-                return v.split(",")[0].strip()
-        return request.client.host if request.client else "unknown"
+        host = request.client.host if request.client else ""
+        if host in self._trusted_proxies():
+            for header in ("cf-connecting-ip", "x-real-ip", "x-forwarded-for"):
+                v = request.headers.get(header, "")
+                if v:
+                    return v.split(",")[0].strip()
+        return host or "unknown"
+
+    def purge_expired_blocks(self) -> None:
+        """Drop expired per-IP rate-limit entries. Call periodically from a background task."""
+        self._rl.purge_expired()
 
     def _is_secure(self, request: Request) -> bool:
         if os.getenv("AUTH_SECURE_COOKIE") == "1":

@@ -37,11 +37,16 @@ scripts\check.bat          # Windows
 bash scripts/check.sh      # Linux/macOS
 ```
 
-**Docker:**
+**Docker (production, prebuilt GHCR image):**
 ```
-docker compose up -d --build
+docker compose up -d
 ```
-Maps host:8088 → container:8000. Requires 512MB shm for Chromium. Data persisted in bind mount `./data:/app/data`.
+
+**Docker (local dev, builds from source):**
+```
+docker compose -f docker-compose-dev.yml up --build
+```
+Both map host:8088 → container:8000. Requires 512MB shm for Chromium. Data persisted in bind mount `./data:/app/data`.
 
 ## Architecture
 
@@ -97,3 +102,4 @@ See `.env.example`. Key vars:
 - `SCRAPE_TIMEOUT` — global scraping timeout in seconds (default 300)
 - `RATE_LIMIT` — per-IP rate limit (default `20/minute`), requires restart to change
 - `DEBUG` — saves debug artifacts to `debug/`
+- `TRUSTED_PROXIES` — comma-separated IPs allowed to set `CF-Connecting-IP`/`X-Real-IP`/`X-Forwarded-For` for client IP resolution (default `127.0.0.1`). Requires restart to change.

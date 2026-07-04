@@ -289,7 +289,9 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
 
         with ui.card().classes("q-pa-md full-width"):
             with ui.row().classes("items-center q-mb-xs"):
-                ui.label("Interfaccia").classes("text-caption text-grey-6 text-uppercase")
+                ui.label("Interfaccia").classes(
+                    "text-caption text-grey-6 text-uppercase"
+                )
                 ui.space()
                 ui.badge("hot-reload").props("color=positive")
             ui.separator().classes("q-mb-sm")
