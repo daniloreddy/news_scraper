@@ -12,3 +12,4 @@ services:
     shm_size: "512m"
     volumes:
       - ./data:/app/data
+      - ./debug:/app/debug

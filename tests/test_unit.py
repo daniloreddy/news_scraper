@@ -321,9 +321,9 @@ class TestSanitizeMarkdown:
 class TestDebugMode:
     def test_debug_true_creates_file(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        from app.scraper import _save_debug_file
+        from app.scraper import _save_debug_file, config
 
-        with patch("app.scraper.DEBUG", True):
+        with patch.object(config, "get_bool", return_value=True):
             _save_debug_file("output.md", "Hello debug")
         debug_file = tmp_path / "debug" / "output.md"
         assert debug_file.exists()
@@ -331,9 +331,9 @@ class TestDebugMode:
 
     def test_debug_false_no_file_created(self, tmp_path, monkeypatch):
         monkeypatch.chdir(tmp_path)
-        from app.scraper import _save_debug_file
+        from app.scraper import _save_debug_file, config
 
-        with patch("app.scraper.DEBUG", False):
+        with patch.object(config, "get_bool", return_value=False):
             _save_debug_file("output.md", "Should not appear")
         assert not (tmp_path / "debug").exists()
 
@@ -427,8 +427,18 @@ class TestScrapeArticlePage:
 
 
 class TestRetryLogic:
+    @staticmethod
+    def _llm_response(content: str) -> MagicMock:
+        resp = MagicMock()
+        resp.is_success = True
+        resp.json.return_value = {
+            "choices": [{"message": {"content": content}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 2},
+        }
+        return resp
+
     def test_retries_on_transient_error_and_succeeds(self):
-        from app.scraper import _call_llm_api, llm_client
+        from app.scraper import _call_llm_api
 
         call_count = [0]
 
@@ -436,41 +446,41 @@ class TestRetryLogic:
             call_count[0] += 1
             if call_count[0] < 3:
                 raise TimeoutError("Transient failure")
-            resp = MagicMock()
-            resp.choices[0].message.content = '{"articles": []}'
-            return resp
+            return self._llm_response('{"articles": []}')
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
-            with patch.object(llm_client.chat.completions, "create", side_effect=flaky):
+            with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=flaky)):
                 result = asyncio.run(
                     _call_llm_api([{"role": "user", "content": "test"}])
                 )
 
         assert call_count[0] == 3
-        assert result == '{"articles": []}'
+        assert result.content == '{"articles": []}'
+        assert result.prompt_tokens == 5
+        assert result.completion_tokens == 2
 
     def test_raises_retry_error_after_max_attempts(self):
-        from app.scraper import _call_llm_api, llm_client
+        from app.scraper import _call_llm_api
 
         async def always_fail(*args, **kwargs):
             raise ConnectionError("LLM unavailable")
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
-            with patch.object(
-                llm_client.chat.completions, "create", side_effect=always_fail
+            with patch(
+                "httpx.AsyncClient.post", new=AsyncMock(side_effect=always_fail)
             ):
                 with pytest.raises(RetryError):
                     asyncio.run(_call_llm_api([{"role": "user", "content": "test"}]))
 
     def test_extract_articles_returns_empty_after_retry_exhausted(self):
-        from app.scraper import _extract_articles_with_llm, llm_client
+        from app.scraper import _extract_articles_with_llm
 
         async def always_fail(*args, **kwargs):
             raise ConnectionError("LLM unavailable")
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
-            with patch.object(
-                llm_client.chat.completions, "create", side_effect=always_fail
+            with patch(
+                "httpx.AsyncClient.post", new=AsyncMock(side_effect=always_fail)
             ):
                 result = asyncio.run(
                     _extract_articles_with_llm(
@@ -480,4 +490,4 @@ class TestRetryLogic:
                     )
                 )
 
-        assert result == []
+        assert result == ([], 0, 0)

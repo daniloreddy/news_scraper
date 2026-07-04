@@ -10,7 +10,7 @@ echo [INFO] Creating virtual environment...
 python -m venv venv
 CALL venv\Scripts\activate.bat
 echo [INFO] Installing dependencies...
-pip install -r requirements.txt
+pip install -r requirements.txt -r requirements.dev.txt
 GOTO CHECK
 
 :ACTIVATE

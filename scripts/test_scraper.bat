@@ -2,7 +2,24 @@
 REM news-scraper API test script (Windows)
 REM Usage: set TOKEN=xxx && scripts\test_scraper.bat
 REM        set HOST=myserver && set PORT=8088 && scripts\test_scraper.bat
+SETLOCAL
+SET "SCRIPTS_DIR=%~dp0"
+SET "ROOT_DIR=%SCRIPTS_DIR%.."
+CD /D "%ROOT_DIR%"
 
+IF EXIST venv GOTO ACTIVATE
+
+echo [INFO] Creating virtual environment...
+python -m venv venv
+CALL venv\Scripts\activate.bat
+echo [INFO] Installing dependencies...
+pip install -r requirements.txt
+GOTO RUN
+
+:ACTIVATE
+CALL venv\Scripts\activate.bat
+
+:RUN
 if "%TOKEN%"=="" set TOKEN=
 if "%HOST%"=="" set HOST=localhost
 if "%PORT%"=="" set PORT=8088
@@ -29,3 +46,4 @@ curl -s -X POST "http://%HOST%:%PORT%/scrape" ^
 
 echo.
 echo === Test Complete ===
+ENDLOCAL

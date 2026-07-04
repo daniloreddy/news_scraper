@@ -62,6 +62,10 @@ LLM_MAX_PROMPT_CHARS=8000
 API_AUTH_TOKEN=your-super-secret-token-here
 SCRAPE_TIMEOUT=300
 RATE_LIMIT=20/minute
+# Trusted reverse-proxy IPs allowed to set CF-Connecting-IP / X-Real-IP /
+# X-Forwarded-For. Default 127.0.0.1 is correct for Cloudflare Tunnel pointing
+# at uvicorn on the same host. Leave empty if exposed directly to the internet.
+TRUSTED_PROXIES=127.0.0.1
 DEBUG=false
 ```
 

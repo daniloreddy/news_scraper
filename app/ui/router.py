@@ -15,7 +15,7 @@ router = APIRouter()
 
 @router.get("/login")
 async def login_page() -> Response:
-    return FileResponse("static/ui_login.html")
+    return FileResponse("static/login.html")
 
 
 @router.post("/auth/login")

@@ -9,20 +9,21 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 venv\Scripts\python scripts\set_password.py
 ```
 
-**Run locally (Windows):**
+**Run locally:**
 ```bat
-scripts\run_local.bat
+scripts\run.bat            # Windows
+bash scripts/run.sh        # Linux/macOS
 ```
-Starts uvicorn on port 8088 with `--reload`.
+Starts uvicorn on port 8088 with `--reload`. Auto-creates the venv and installs deps on first run.
 
 **Run locally (manual):**
 ```
 venv\Scripts\python -m uvicorn app.main:app --reload --port 8088 --loop asyncio
 ```
 
-**Install deps:**
+**Install deps (dev deps needed for quality checks):**
 ```
-venv\Scripts\pip install -r requirements.txt
+venv\Scripts\pip install -r requirements.txt -r requirements.dev.txt
 venv\Scripts\playwright install chromium
 ```
 
@@ -33,8 +34,8 @@ venv\Scripts\python scripts/test_api.py
 
 **Quality checks (ruff + mypy + pytest):**
 ```bat
-scripts\check.bat          # Windows
-bash scripts/check.sh      # Linux/macOS
+scripts\checks.bat         # Windows
+bash scripts/checks.sh     # Linux/macOS
 ```
 
 **Docker (production, prebuilt GHCR image):**
@@ -46,7 +47,7 @@ docker compose up -d
 ```
 docker compose -f docker-compose-dev.yml up --build
 ```
-Both map host:8088 → container:8000. Requires 512MB shm for Chromium. Data persisted in bind mount `./data:/app/data`.
+Both map host:8088 → container:8000. Requires 512MB shm for Chromium. Bind mounts: `./data:/app/data` (runtime data) and `./debug:/app/debug` (DEBUG artifacts).
 
 ## Architecture
 
@@ -70,7 +71,7 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 
 **LLM integration:** Direct `httpx` HTTP POST to `{LLM_BASE_URL}/chat/completions` (OpenAI-compatible). No openai SDK. Supports Ollama, LM Studio, any compatible endpoint. Config via `app/config.py` ConfigManager — hot-reload without restart.
 
-**Config hot reload:** `data/config.json` overrides `.env` at runtime. Changing LLM connection params rebuilds the httpx client immediately. `RATE_LIMIT` requires restart.
+**Config hot reload:** `data/config.json` overrides `.env` at runtime. LLM params are read from ConfigManager on every call (a fresh httpx client is created per request in `scraper._call_llm_api`), so changes apply immediately. `RATE_LIMIT` requires restart.
 
 **Debug mode:** Set `DEBUG=true` in `.env` or via UI → saves HTML, Markdown, LLM responses to `debug/`.
 
@@ -103,3 +104,6 @@ See `.env.example`. Key vars:
 - `RATE_LIMIT` — per-IP rate limit (default `20/minute`), requires restart to change
 - `DEBUG` — saves debug artifacts to `debug/`
 - `TRUSTED_PROXIES` — comma-separated IPs allowed to set `CF-Connecting-IP`/`X-Real-IP`/`X-Forwarded-For` for client IP resolution (default `127.0.0.1`). Requires restart to change.
+- `AUTH_SECURE_COOKIE` — set to `1` to force the `Secure` flag on the dashboard session cookie (auto-enabled behind HTTPS proxies via `X-Forwarded-Proto`).
+
+Note: `ConfigManager._load()` calls `load_dotenv()`, so `.env` values are also exported to `os.environ` (without overriding existing vars) — required by `TRUSTED_PROXIES`/`AUTH_SECURE_COOKIE`, which are read via `os.getenv` outside ConfigManager.
