@@ -14,5 +14,8 @@ else
     source .venv/bin/activate
 fi
 
-echo "[INFO] Starting news-scraper..."
-uvicorn app.main:app --reload --port 8088
+APP_PORT="$(grep -m1 '^APP_PORT=' .env 2>/dev/null | cut -d '=' -f2-)"
+APP_PORT="${APP_PORT:-8088}"
+
+echo "[INFO] Starting news-scraper on port $APP_PORT..."
+uvicorn app.main:app --reload --port "$APP_PORT"

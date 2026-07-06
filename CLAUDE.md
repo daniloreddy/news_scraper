@@ -14,7 +14,7 @@ venv\Scripts\python scripts\set_password.py
 scripts\run.bat            # Windows
 bash scripts/run.sh        # Linux/macOS
 ```
-Starts uvicorn on port 8088 with `--reload`. Auto-creates the venv and installs deps on first run.
+Starts uvicorn with `--reload` on `APP_PORT` from `.env` (default 8088 if unset/no `.env`). Auto-creates the venv and installs deps on first run.
 
 **Run locally (manual):**
 ```
@@ -47,7 +47,7 @@ docker compose up -d
 ```
 docker compose -f docker-compose-dev.yml up --build
 ```
-Both map host:8088 → container:8000. Requires 512MB shm for Chromium. Bind mounts: `./data:/app/data` (runtime data) and `./debug:/app/debug` (DEBUG artifacts).
+Both map host:`APP_PORT` (default 8088, set in `.env`) → container:8000. Requires 512MB shm for Chromium. Bind mounts: `./data:/app/data` (runtime data) and `./debug:/app/debug` (DEBUG artifacts).
 
 ## Architecture
 
@@ -101,6 +101,7 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 ## Environment Variables
 
 See `.env.example`. Key vars:
+- `APP_PORT` — host listen port (default 8088). Read only by `scripts/run.sh`, `scripts/run.bat` and `docker-compose*.yml` (`${APP_PORT:-8088}` in the `ports:` mapping) — not read by the Python app itself. Restart/re-`up` required to change.
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TEMPERATURE`, `LLM_TIMEOUT`
 - `LLM_MAX_PROMPT_CHARS` — truncates markdown sent to LLM (default 8000 chars ≈ 2700 tokens)
 - `API_AUTH_TOKEN` — if set, all `/scrape*` endpoints require `Authorization: Bearer <token>`
