@@ -3,6 +3,7 @@
 import asyncio
 from unittest.mock import patch, AsyncMock
 
+from app.config import config
 from app.scraper import ScrapeResult
 
 
@@ -211,7 +212,7 @@ class TestInputValidation:
 
 class TestAuthentication:
     def test_no_token_configured_request_without_header_allowed(self, client):
-        with patch("app.main.API_AUTH_TOKEN", None):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": ""}):
             with patch(
                 "app.main.scrape_latest_news",
                 new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
@@ -220,12 +221,12 @@ class TestAuthentication:
         assert response.status_code == 200
 
     def test_token_configured_request_without_header_returns_401(self, client):
-        with patch("app.main.API_AUTH_TOKEN", "mysecret"):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": "mysecret"}):
             response = client.post("/scrape", json={"url": "https://example.com"})
         assert response.status_code == 401
 
     def test_token_configured_wrong_token_returns_401(self, client):
-        with patch("app.main.API_AUTH_TOKEN", "mysecret"):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": "mysecret"}):
             response = client.post(
                 "/scrape",
                 json={"url": "https://example.com"},
@@ -234,7 +235,7 @@ class TestAuthentication:
         assert response.status_code == 401
 
     def test_token_configured_correct_token_allowed(self, client):
-        with patch("app.main.API_AUTH_TOKEN", "mysecret"):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": "mysecret"}):
             with patch(
                 "app.main.scrape_latest_news",
                 new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
@@ -247,7 +248,7 @@ class TestAuthentication:
         assert response.status_code == 200
 
     def test_auth_enforced_on_article_endpoint_too(self, client):
-        with patch("app.main.API_AUTH_TOKEN", "mysecret"):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": "mysecret"}):
             response = client.post(
                 "/scrape/article", json={"url": "https://example.com"}
             )

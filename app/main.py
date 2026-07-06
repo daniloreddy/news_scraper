@@ -7,13 +7,12 @@ Dashboard di monitoraggio su /ui/
 import asyncio
 import ipaddress
 import logging
-import os
 import secrets
 import sys
 import threading
 import time
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Any, Callable, Coroutine, Optional
 from urllib.parse import urlparse
 
 # Fix per Windows: Playwright richiede ProactorEventLoop per gestire i sottoprocessi
@@ -32,7 +31,8 @@ from slowapi.errors import RateLimitExceeded
 from .config import config
 from . import metrics
 from .metrics import RequestRecord
-from .scraper import scrape_latest_news, scrape_article
+from .net import resolve_client_ip
+from .scraper import scrape_latest_news, scrape_article, ScrapeResult
 from .ui.router import router as ui_router, auth as ui_auth
 
 logging.basicConfig(level=logging.INFO)
@@ -43,43 +43,19 @@ security = HTTPBearer(auto_error=False)
 # Limits concurrent Playwright browser launches to prevent OOM
 BROWSER_SEMAPHORE = threading.Semaphore(3)
 
-# Module-level so tests can patch it
-API_AUTH_TOKEN: Optional[str] = config.get("API_AUTH_TOKEN") or None
-
-
-def _trusted_proxies() -> set[str]:
-    raw = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
-    return {p.strip() for p in raw.split(",") if p.strip()}
-
-
-def get_client_ip(request: Request) -> str:
-    """Resolve the real client IP. Forwarded headers are only trusted when the
-    direct connection comes from a known reverse proxy (TRUSTED_PROXIES), otherwise
-    clients could spoof them to bypass per-IP rate limiting."""
-    host = request.client.host if request.client else ""
-    if host in _trusted_proxies():
-        cf_ip = request.headers.get("CF-Connecting-IP")
-        if cf_ip:
-            return cf_ip
-        real_ip = request.headers.get("X-Real-IP")
-        if real_ip:
-            return real_ip
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
-    return host or "unknown"
-
-
-limiter = Limiter(key_func=get_client_ip)
+limiter = Limiter(key_func=resolve_client_ip)
 
 
 def verify_token(
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
 ) -> Optional[str]:
-    """Verifica la validità del Bearer Token se impostato in configurazione."""
-    if API_AUTH_TOKEN:
+    """Verifica la validità del Bearer Token se impostato in configurazione.
+    Read fresh from ConfigManager on every call so UI changes take effect
+    immediately, without requiring a process restart."""
+    token = config.get("API_AUTH_TOKEN") or None
+    if token:
         if credentials is None or not secrets.compare_digest(
-            credentials.credentials, API_AUTH_TOKEN
+            credentials.credentials, token
         ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
@@ -120,10 +96,17 @@ async def _purge_ui_auth_blocks_periodically() -> None:
         ui_auth.purge_expired_blocks()
 
 
+async def _purge_old_metrics_periodically() -> None:
+    while True:
+        await asyncio.sleep(6 * 3600)
+        await metrics.purge_old(config.get_int("METRICS_RETENTION_DAYS", 30))
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await metrics.init_db()
     purge_task = asyncio.create_task(_purge_ui_auth_blocks_periodically())
+    metrics_purge_task = asyncio.create_task(_purge_old_metrics_periodically())
 
     try:
         import subprocess
@@ -142,6 +125,7 @@ async def lifespan(app: FastAPI):
         )
     yield
     purge_task.cancel()
+    metrics_purge_task.cancel()
 
 
 app = FastAPI(
@@ -224,51 +208,48 @@ async def health(request: Request):
     return {"status": "ok"}
 
 
-@app.post("/scrape", response_model=list[ArticleResult])
-@limiter.limit(lambda: config.get("RATE_LIMIT", "20/minute"))
-def scrape(
-    request: Request,
-    req: ScrapeRequest,
-    token: Optional[str] = Depends(verify_token),
-):
+def _run_scrape_sync(
+    endpoint: str,
+    url: str,
+    coro: Coroutine[Any, Any, ScrapeResult],
+    extract: Callable[[ScrapeResult], Any],
+    empty_error: Optional[str] = None,
+) -> Any:
+    """Bridges a sync FastAPI endpoint with the async scraper coroutine: runs it
+    in its own event loop bounded by BROWSER_SEMAPHORE, records metrics, and maps
+    timeouts/errors/empty results to the right HTTPException. `empty_error`, if
+    given, turns an empty `result.articles` into a 404 instead of calling `extract`.
     """
-    Scrapa la pagina principale e restituisce le ultime N notizie.
-    """
-    logger.info("Scraping: %s (max %d)", req.url, req.max_articles)
-
     with BROWSER_SEMAPHORE:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         async def _run():
             start = time.time()
-            result = None
+            result: Optional[ScrapeResult] = None
             status_str = "ok"
             error_msg: Optional[str] = None
             http_exc: Optional[HTTPException] = None
 
             try:
                 result = await asyncio.wait_for(
-                    scrape_latest_news(req.url, req.max_articles),
-                    timeout=config.get_float("SCRAPE_TIMEOUT", 300),
+                    coro, timeout=config.get_float("SCRAPE_TIMEOUT", 300)
                 )
-                if not result.articles:
+                if empty_error and not result.articles:
                     status_str = "error"
-                    error_msg = "Nessuna news trovata"
-                    http_exc = HTTPException(
-                        status_code=404, detail="Nessuna news trovata"
-                    )
+                    error_msg = empty_error
+                    http_exc = HTTPException(status_code=404, detail=empty_error)
             except asyncio.TimeoutError:
                 status_str = "timeout"
             except Exception as e:
                 status_str = "error"
                 error_msg = str(e)
-                logger.error("Errore scraping: %s", e)
+                logger.error("Errore scraping (%s): %s", endpoint, e)
             finally:
                 await metrics.record(
                     RequestRecord(
-                        endpoint="/scrape",
-                        url=req.url,
+                        endpoint=endpoint,
+                        url=url,
                         status=status_str,
                         duration=time.time() - start,
                         error_msg=error_msg,
@@ -283,12 +264,32 @@ def scrape(
                 raise http_exc
             if status_str == "error":
                 raise HTTPException(status_code=500, detail="Internal server error")
-            return result.articles  # type: ignore[union-attr]
+            return extract(result)  # type: ignore[arg-type]
 
         try:
             return loop.run_until_complete(_run())
         finally:
             loop.close()
+
+
+@app.post("/scrape", response_model=list[ArticleResult])
+@limiter.limit(lambda: config.get("RATE_LIMIT", "20/minute"))
+def scrape(
+    request: Request,
+    req: ScrapeRequest,
+    token: Optional[str] = Depends(verify_token),
+):
+    """
+    Scrapa la pagina principale e restituisce le ultime N notizie.
+    """
+    logger.info("Scraping: %s (max %d)", req.url, req.max_articles)
+    return _run_scrape_sync(
+        endpoint="/scrape",
+        url=req.url,
+        coro=scrape_latest_news(req.url, req.max_articles),
+        extract=lambda r: r.articles,
+        empty_error="Nessuna news trovata",
+    )
 
 
 @app.post("/scrape/article", response_model=ArticleResult)
@@ -301,48 +302,12 @@ def scrape_single(
     """
     Scrapa un singolo articolo dato il suo URL.
     """
-    with BROWSER_SEMAPHORE:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-        async def _run():
-            start = time.time()
-            result = None
-            status_str = "ok"
-            error_msg: Optional[str] = None
-
-            try:
-                result = await asyncio.wait_for(
-                    scrape_article(req.url),
-                    timeout=config.get_float("SCRAPE_TIMEOUT", 300),
-                )
-            except asyncio.TimeoutError:
-                status_str = "timeout"
-            except Exception as e:
-                status_str = "error"
-                error_msg = str(e)
-                logger.error("Errore scraping articolo: %s", e)
-            finally:
-                await metrics.record(
-                    RequestRecord(
-                        endpoint="/scrape/article",
-                        url=req.url,
-                        status=status_str,
-                        duration=time.time() - start,
-                        error_msg=error_msg,
-                    )
-                )
-
-            if status_str == "timeout":
-                raise HTTPException(status_code=504, detail="Scraping timeout")
-            if status_str == "error":
-                raise HTTPException(status_code=500, detail="Internal server error")
-            return result.articles[0]  # type: ignore[union-attr]
-
-        try:
-            return loop.run_until_complete(_run())
-        finally:
-            loop.close()
+    return _run_scrape_sync(
+        endpoint="/scrape/article",
+        url=req.url,
+        coro=scrape_article(req.url),
+        extract=lambda r: r.articles[0],
+    )
 
 
 # --- NiceGUI mount ---

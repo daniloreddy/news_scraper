@@ -53,10 +53,11 @@ Both map host:8088 → container:8000. Requires 512MB shm for Chromium. Bind mou
 
 FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 
-- `app/main.py` — HTTP layer. Scraping endpoints, auth middleware, NiceGUI mount.
-- `app/scraper.py` — Scraping logic. Playwright → BeautifulSoup → MarkItDown → LLM.
+- `app/main.py` — HTTP layer. Scraping endpoints (`/scrape`, `/scrape/article` share the `_run_scrape_sync()` helper), auth middleware, NiceGUI mount.
+- `app/scraper.py` — Scraping logic. Playwright → BeautifulSoup → MarkItDown → LLM. Browser/page launch shared via `_new_browser_page()`; HTML→Markdown conversion in-memory via `_html_to_markdown()` (`markitdown.convert_stream`, no temp files).
 - `app/config.py` — ConfigManager singleton. `.env` baseline + `data/config.json` runtime overrides.
-- `app/metrics.py` — MetricsDB. SQLite via aiosqlite. Records each request with token counts.
+- `app/metrics.py` — MetricsDB. SQLite via aiosqlite. Records each request with token counts; `purge_old()` prunes records past `METRICS_RETENTION_DAYS`.
+- `app/net.py` — Shared client-IP resolution (`resolve_client_ip()`, `trusted_proxies()`), used by both `main.py` (rate limiting) and `ui/auth.py` (login rate limiting).
 - `app/ui/auth.py` — AuthManager for dashboard (scrypt password, JWT cookie).
 - `app/ui/router.py` — FastAPI routes: `/login`, `/auth/login`, `/auth/logout`.
 - `app/ui/pages.py` — NiceGUI pages: dashboard (`/ui/`), config editor (`/ui/config`).
@@ -64,16 +65,20 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 **Scrape flow (`/scrape`):**
 1. Playwright renders full JS page → raw HTML
 2. BeautifulSoup normalizes custom tags, resolves relative URLs
-3. MarkItDown converts HTML → Markdown
+3. MarkItDown converts HTML → Markdown (in-memory, no temp files)
 4. HTTP POST to `{LLM_BASE_URL}/chat/completions` → article links as structured JSON
 5. Each article URL is scraped with `_scrape_article_page()` → title, content, metadata
 6. Returns JSON array + records metrics (duration, token counts) to SQLite
+
+`/scrape/article` runs the same pipeline from step 5 for a single given URL (no LLM link-extraction step).
 
 **LLM integration:** Direct `httpx` HTTP POST to `{LLM_BASE_URL}/chat/completions` (OpenAI-compatible). No openai SDK. Supports Ollama, LM Studio, any compatible endpoint. Config via `app/config.py` ConfigManager — hot-reload without restart.
 
 **Config hot reload:** `data/config.json` overrides `.env` at runtime. LLM params are read from ConfigManager on every call (a fresh httpx client is created per request in `scraper._call_llm_api`), so changes apply immediately. `RATE_LIMIT` requires restart.
 
 **Debug mode:** Set `DEBUG=true` in `.env` or via UI → saves HTML, Markdown, LLM responses to `debug/`.
+
+**Metrics retention:** `metrics.purge_old()` runs every 6h from a background task (started in `main.py` lifespan), deleting records older than `METRICS_RETENTION_DAYS` (default 30). No restart needed — picked up on the next purge cycle.
 
 ## Key Constraints
 
@@ -86,7 +91,6 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 - **NiceGUI import order:** `from .ui import pages as _ui_pages` must be imported BEFORE `ui.run_with(app)` and must NOT use `import app.ui.pages` (absolute import shadows the `app = FastAPI(...)` variable).
 - **NiceGUI navigation paths:** `ui.navigate.to()` prepends the mount path `/ui` automatically. Use paths relative to the NiceGUI root (e.g. `/config` not `/ui/config`). To navigate to FastAPI routes use `ui.run_javascript("window.location.href='/route'")`.
 - **NiceGUI dark mode persistence:** Use `from nicegui import app as ng_app` and `ng_app.storage.user` — never `ui.dark_mode(True)` hardcoded (resets theme on every page load). `ui.storage` does not exist.
-- **Temp files:** `temp_*.html` created at runtime in project root (gitignored).
 
 ## Runtime data (gitignored)
 
@@ -102,6 +106,7 @@ See `.env.example`. Key vars:
 - `API_AUTH_TOKEN` — if set, all `/scrape*` endpoints require `Authorization: Bearer <token>`
 - `SCRAPE_TIMEOUT` — global scraping timeout in seconds (default 300)
 - `RATE_LIMIT` — per-IP rate limit (default `20/minute`), requires restart to change
+- `METRICS_RETENTION_DAYS` — days of request history kept in `data/metrics.db` before pruning (default 30), checked every 6h, no restart needed
 - `DEBUG` — saves debug artifacts to `debug/`
 - `TRUSTED_PROXIES` — comma-separated IPs allowed to set `CF-Connecting-IP`/`X-Real-IP`/`X-Forwarded-For` for client IP resolution (default `127.0.0.1`). Requires restart to change.
 - `AUTH_SECURE_COOKIE` — set to `1` to force the `Secure` flag on the dashboard session cookie (auto-enabled behind HTTPS proxies via `X-Forwarded-Proto`).

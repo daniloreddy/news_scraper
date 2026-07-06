@@ -8,6 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from unittest.mock import AsyncMock, MagicMock, patch
 from tenacity import RetryError
 
+from app.config import config
 from app.scraper import _preprocess_html, ArticlesList
 from app.main import verify_token, _validate_url, ScrapeRequest, ArticleRequest
 
@@ -62,37 +63,37 @@ class TestPreprocessHtml:
 
 class TestVerifyToken:
     def test_no_token_configured_no_credentials(self):
-        with patch("app.main.API_AUTH_TOKEN", None):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": ""}):
             result = verify_token(None)
         assert result is None
 
     def test_no_token_configured_any_credentials_allowed(self):
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="anything")
-        with patch("app.main.API_AUTH_TOKEN", None):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": ""}):
             result = verify_token(creds)
         assert result == "anything"
 
     def test_token_configured_valid_credentials(self):
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="secret123")
-        with patch("app.main.API_AUTH_TOKEN", "secret123"):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": "secret123"}):
             result = verify_token(creds)
         assert result == "secret123"
 
     def test_token_configured_wrong_credentials_raises_401(self):
         creds = HTTPAuthorizationCredentials(scheme="Bearer", credentials="wrong")
-        with patch("app.main.API_AUTH_TOKEN", "secret123"):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": "secret123"}):
             with pytest.raises(HTTPException) as exc_info:
                 verify_token(creds)
         assert exc_info.value.status_code == 401
 
     def test_token_configured_no_credentials_raises_401(self):
-        with patch("app.main.API_AUTH_TOKEN", "secret123"):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": "secret123"}):
             with pytest.raises(HTTPException) as exc_info:
                 verify_token(None)
         assert exc_info.value.status_code == 401
 
     def test_401_includes_www_authenticate_header(self):
-        with patch("app.main.API_AUTH_TOKEN", "secret"):
+        with patch.dict(config._cache, {"API_AUTH_TOKEN": "secret"}):
             with pytest.raises(HTTPException) as exc_info:
                 verify_token(None)
         assert "WWW-Authenticate" in exc_info.value.headers
@@ -362,7 +363,7 @@ class TestScrapeArticlePage:
         from app.scraper import md_converter
 
         page, mock_result = self._make_page("A" * 15000)
-        with patch.object(md_converter, "convert", return_value=mock_result):
+        with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert len(result["content"]) == 8000
 
@@ -370,7 +371,7 @@ class TestScrapeArticlePage:
         from app.scraper import md_converter
 
         page, mock_result = self._make_page("Short content")
-        with patch.object(md_converter, "convert", return_value=mock_result):
+        with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert result["content"] == "Short content"
 
@@ -378,7 +379,7 @@ class TestScrapeArticlePage:
         from app.scraper import md_converter
 
         page, mock_result = self._make_page("Para1\n\n\n\n\nPara2")
-        with patch.object(md_converter, "convert", return_value=mock_result):
+        with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert "\n\n\n" not in result["content"]
         assert "Para1" in result["content"]
@@ -390,7 +391,7 @@ class TestScrapeArticlePage:
         page, mock_result = self._make_page(
             "Content", title="Article Title — Site Name"
         )
-        with patch.object(md_converter, "convert", return_value=mock_result):
+        with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert result["title"] == "Article Title"
 
@@ -398,7 +399,7 @@ class TestScrapeArticlePage:
         from app.scraper import md_converter
 
         page, mock_result = self._make_page("Content", title="Plain Title")
-        with patch.object(md_converter, "convert", return_value=mock_result):
+        with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert result["title"] == "Plain Title"
 
@@ -406,7 +407,7 @@ class TestScrapeArticlePage:
         from app.scraper import md_converter
 
         page, mock_result = self._make_page("Content")
-        with patch.object(md_converter, "convert", return_value=mock_result):
+        with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert result["published_date"] is None
 
@@ -416,7 +417,7 @@ class TestScrapeArticlePage:
         page, mock_result = self._make_page(
             "Content", thumbnail="https://example.com/thumb.jpg"
         )
-        with patch.object(md_converter, "convert", return_value=mock_result):
+        with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert result["thumbnail_url"] == "https://example.com/thumb.jpg"
 

@@ -20,6 +20,7 @@ _DEFAULTS: dict[str, str] = {
     "API_AUTH_TOKEN": "",
     "SCRAPE_TIMEOUT": "300",
     "RATE_LIMIT": "20/minute",
+    "METRICS_RETENTION_DAYS": "30",
     "DEBUG": "false",
     "REFRESH_ENABLED": "true",
     "REFRESH_INTERVAL": "30",

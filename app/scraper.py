@@ -4,13 +4,14 @@ Logica di scraping con Playwright.
 - scrape_article: apre un articolo, estrae titolo, data, testo pulito
 """
 
+import io
 import json
 import logging
 import os
 import re
-import tempfile
-from dataclasses import dataclass, field
-from typing import List, Optional
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import AsyncIterator, List, Optional
 from urllib.parse import urlparse
 
 import httpx
@@ -26,19 +27,44 @@ logger = logging.getLogger(__name__)
 
 md_converter = MarkItDown()
 
+_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+
+def _html_to_markdown(html: str) -> str:
+    """Converts HTML to Markdown in-memory (no temp file on disk)."""
+    stream = io.BytesIO(html.encode("utf-8"))
+    return md_converter.convert_stream(stream, file_extension=".html").text_content
+
+
+@asynccontextmanager
+async def _new_browser_page() -> AsyncIterator[Page]:
+    """Launches a Chromium page with the shared user agent; closes the browser
+    on exit regardless of what happens inside the `with` block."""
+    async with async_playwright() as p:
+        browser = await p.chromium.launch(headless=True)
+        try:
+            context = await browser.new_context(user_agent=_USER_AGENT)
+            page = await context.new_page()
+            yield page
+        finally:
+            await browser.close()
+
 
 @dataclass
 class ScrapeResult:
     articles: list[dict]
-    prompt_tokens: int = field(default=0)
-    completion_tokens: int = field(default=0)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 @dataclass
 class _LLMResult:
     content: Optional[str]
-    prompt_tokens: int = field(default=0)
-    completion_tokens: int = field(default=0)
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 def _sanitize_markdown(text: str) -> str:
@@ -221,98 +247,62 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> ScrapeResult:
     3. Usa l'LLM per trovare i link agli articoli.
     4. Scrapa i singoli articoli.
     """
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
+    async with _new_browser_page() as page:
+        logger.info("Apertura homepage: %s", url)
+        await page.goto(url, wait_until="networkidle", timeout=30000)
+
+        html_content = await page.content()
+        _save_debug_file("playwright_output.html", html_content)
+
+        preprocessed_html = _preprocess_html(html_content, url)
+        _save_debug_file("playwright_preprocessed.html", preprocessed_html)
+
+        logger.info("Conversione HTML -> Markdown")
+        markdown_text = _html_to_markdown(preprocessed_html)
+        _save_debug_file("markitdown_output.md", markdown_text)
+
+        (
+            articles_meta,
+            prompt_tokens,
+            completion_tokens,
+        ) = await _extract_articles_with_llm(
+            _sanitize_markdown(markdown_text), url, max_articles
         )
-        page = await context.new_page()
+        logger.info("L'LLM ha estratto %d link ad articoli.", len(articles_meta))
 
-        try:
-            logger.info("Apertura homepage: %s", url)
-            await page.goto(url, wait_until="networkidle", timeout=30000)
-
-            html_content = await page.content()
-            _save_debug_file("playwright_output.html", html_content)
-
-            preprocessed_html = _preprocess_html(html_content, url)
-            _save_debug_file("playwright_preprocessed.html", preprocessed_html)
-
-            logger.info("Conversione HTML -> Markdown")
-            with tempfile.NamedTemporaryFile(
-                suffix=".html", delete=False, mode="w", encoding="utf-8"
-            ) as tmp:
-                temp_file = tmp.name
-                tmp.write(preprocessed_html)
+        results = []
+        for meta in articles_meta:
             try:
-                md_result = md_converter.convert(temp_file)
-                markdown_text = md_result.text_content
-                _save_debug_file("markitdown_output.md", markdown_text)
-            finally:
-                if os.path.exists(temp_file):
-                    os.remove(temp_file)
+                article_data = await _scrape_article_page(page, meta["url"])
 
-            (
-                articles_meta,
-                prompt_tokens,
-                completion_tokens,
-            ) = await _extract_articles_with_llm(
-                _sanitize_markdown(markdown_text), url, max_articles
-            )
-            logger.info("L'LLM ha estratto %d link ad articoli.", len(articles_meta))
+                article_data["title"] = meta.get("title") or article_data["title"]
+                if not article_data.get("published_date") and meta.get(
+                    "published_date"
+                ):
+                    article_data["published_date"] = meta["published_date"]
+                if not article_data.get("thumbnail_url") and meta.get("thumbnail_url"):
+                    article_data["thumbnail_url"] = meta["thumbnail_url"]
 
-            results = []
-            for meta in articles_meta:
-                try:
-                    article_data = await _scrape_article_page(page, meta["url"])
+                results.append(article_data)
+            except Exception as e:
+                logger.warning(
+                    "Errore nello scraping del singolo articolo %s: %s",
+                    meta["url"],
+                    e,
+                )
 
-                    article_data["title"] = meta.get("title") or article_data["title"]
-                    if not article_data.get("published_date") and meta.get(
-                        "published_date"
-                    ):
-                        article_data["published_date"] = meta["published_date"]
-                    if not article_data.get("thumbnail_url") and meta.get(
-                        "thumbnail_url"
-                    ):
-                        article_data["thumbnail_url"] = meta["thumbnail_url"]
-
-                    results.append(article_data)
-                except Exception as e:
-                    logger.warning(
-                        "Errore nello scraping del singolo articolo %s: %s",
-                        meta["url"],
-                        e,
-                    )
-
-            return ScrapeResult(
-                articles=results,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-            )
-
-        finally:
-            await browser.close()
+        return ScrapeResult(
+            articles=results,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+        )
 
 
 async def scrape_article(url: str) -> ScrapeResult:
     """Entry point per scrapare un singolo articolo (endpoint /scrape/article)."""
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
-        context = await browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-        )
-        page = await context.new_page()
-        try:
-            article = await _scrape_article_page(page, url)
-            return ScrapeResult(articles=[article])
-        finally:
-            await browser.close()
+    async with _new_browser_page() as page:
+        article = await _scrape_article_page(page, url)
+        return ScrapeResult(articles=[article])
 
 
 async def _scrape_article_page(page: Page, url: str) -> dict:
@@ -321,19 +311,7 @@ async def _scrape_article_page(page: Page, url: str) -> dict:
     await page.goto(url, wait_until="domcontentloaded", timeout=30000)
 
     html_content = await page.content()
-
-    with tempfile.NamedTemporaryFile(
-        suffix=".html", delete=False, mode="w", encoding="utf-8"
-    ) as tmp:
-        temp_file = tmp.name
-        tmp.write(html_content)
-    try:
-        md_result = md_converter.convert(temp_file)
-        markdown_text = md_result.text_content
-    finally:
-        if os.path.exists(temp_file):
-            os.remove(temp_file)
-
+    markdown_text = _html_to_markdown(html_content)
     content = re.sub(r"\n{3,}", "\n\n", markdown_text)
 
     title = await page.title()

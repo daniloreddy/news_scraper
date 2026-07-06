@@ -74,29 +74,43 @@ async def record(rec: RequestRecord) -> None:
 async def get_stats(hours: int = 24) -> dict:
     since = time.time() - hours * 3600
     async with aiosqlite.connect(_DB_PATH) as db:
-        db.row_factory = aiosqlite.Row
         async with db.execute(
-            "SELECT * FROM requests WHERE ts >= ? ORDER BY ts DESC", (since,)
+            """SELECT
+                   COUNT(*),
+                   SUM(CASE WHEN status = 'ok' THEN 1 ELSE 0 END),
+                   SUM(CASE WHEN status IN ('error', 'timeout') THEN 1 ELSE 0 END),
+                   AVG(duration),
+                   SUM(prompt_tokens),
+                   SUM(completion_tokens)
+               FROM requests WHERE ts >= ?""",
+            (since,),
         ) as cur:
-            rows = list(await cur.fetchall())
+            row = await cur.fetchone()
 
-    total = len(rows)
-    ok = sum(1 for r in rows if r["status"] == "ok")
-    errors = sum(1 for r in rows if r["status"] in ("error", "timeout"))
-    durations = [r["duration"] for r in rows if r["duration"] is not None]
-    avg_dur = sum(durations) / len(durations) if durations else 0.0
-    p_tok = sum(r["prompt_tokens"] or 0 for r in rows)
-    c_tok = sum(r["completion_tokens"] or 0 for r in rows)
+    total, ok, errors, avg_dur, p_tok, c_tok = row  # type: ignore[misc]
 
     return {
         "period_hours": hours,
-        "total": total,
-        "ok": ok,
-        "errors": errors,
-        "avg_duration_s": round(avg_dur, 2),
-        "prompt_tokens": p_tok,
-        "completion_tokens": c_tok,
+        "total": total or 0,
+        "ok": ok or 0,
+        "errors": errors or 0,
+        "avg_duration_s": round(avg_dur, 2) if avg_dur is not None else 0.0,
+        "prompt_tokens": p_tok or 0,
+        "completion_tokens": c_tok or 0,
     }
+
+
+async def purge_old(days: int) -> None:
+    """Delete request records older than `days`, so metrics.db doesn't grow forever
+    on a long-running instance. Call periodically from a background task."""
+    cutoff = time.time() - days * 86400
+    async with _lock:
+        try:
+            async with aiosqlite.connect(_DB_PATH) as db:
+                await db.execute("DELETE FROM requests WHERE ts < ?", (cutoff,))
+                await db.commit()
+        except Exception as e:
+            logger.warning("MetricsDB purge failed: %s", e)
 
 
 async def get_history(limit: int = 100) -> list[dict]:

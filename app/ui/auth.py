@@ -13,6 +13,8 @@ import jwt
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
+from ..net import resolve_client_ip
+
 logger = logging.getLogger(__name__)
 
 
@@ -132,19 +134,6 @@ class AuthManager:
         except Exception:
             return False
 
-    def _trusted_proxies(self) -> set[str]:
-        raw = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
-        return {p.strip() for p in raw.split(",") if p.strip()}
-
-    def _client_ip(self, request: Request) -> str:
-        host = request.client.host if request.client else ""
-        if host in self._trusted_proxies():
-            for header in ("cf-connecting-ip", "x-real-ip", "x-forwarded-for"):
-                v = request.headers.get(header, "")
-                if v:
-                    return v.split(",")[0].strip()
-        return host or "unknown"
-
     def purge_expired_blocks(self) -> None:
         """Drop expired per-IP rate-limit entries. Call periodically from a background task."""
         self._rl.purge_expired()
@@ -157,7 +146,7 @@ class AuthManager:
     async def handle_login(self, request: Request) -> Response:
         form = await request.form()
         password = str(form.get("password", ""))
-        ip = self._client_ip(request)
+        ip = resolve_client_ip(request)
 
         block_msg = self._rl.check(ip)
         if block_msg:
