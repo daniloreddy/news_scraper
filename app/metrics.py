@@ -67,7 +67,7 @@ async def record(rec: RequestRecord) -> None:
                     ),
                 )
                 await db.commit()
-        except Exception as e:
+        except aiosqlite.Error as e:
             logger.warning("MetricsDB record failed: %s", e)
 
 
@@ -109,7 +109,7 @@ async def purge_old(days: int) -> None:
             async with aiosqlite.connect(_DB_PATH) as db:
                 await db.execute("DELETE FROM requests WHERE ts < ?", (cutoff,))
                 await db.commit()
-        except Exception as e:
+        except aiosqlite.Error as e:
             logger.warning("MetricsDB purge failed: %s", e)
 
 

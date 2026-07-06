@@ -4,10 +4,13 @@ Invocabile da n8n via HTTP POST /scrape
 Dashboard di monitoraggio su /ui/
 """
 
+import argparse
 import asyncio
 import ipaddress
 import logging
+import os
 import secrets
+import subprocess
 import sys
 import threading
 import time
@@ -15,10 +18,8 @@ from contextlib import asynccontextmanager
 from typing import Any, Callable, Coroutine, Optional
 from urllib.parse import urlparse
 
-# Fix per Windows: Playwright richiede ProactorEventLoop per gestire i sottoprocessi
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
+import uvicorn
+from dotenv import load_dotenv
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -28,14 +29,29 @@ from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 
-from .config import config
-from . import metrics
-from .metrics import RequestRecord
-from .net import resolve_client_ip
-from .scraper import scrape_latest_news, scrape_article, ScrapeResult
-from .ui.router import router as ui_router, auth as ui_auth
+# Stage 1 — lightweight parse at import time, before any other env var is read.
+# Required because uvicorn re-imports app.main on every reload-worker import,
+# so .env must be (re)loaded on every import, not only inside __main__.
+_env_parser = argparse.ArgumentParser(add_help=False)
+_env_parser.add_argument("--env-file", type=str, default=None)
+_env_args, _ = _env_parser.parse_known_args()
+load_dotenv(_env_args.env_file)
+
+# Fix per Windows: Playwright richiede ProactorEventLoop per gestire i sottoprocessi
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+from .config import config  # noqa: E402 — must follow stage-1 load_dotenv() above
+from . import metrics  # noqa: E402
+from .metrics import RequestRecord  # noqa: E402
+from .net import resolve_client_ip  # noqa: E402
+from .scraper import scrape_latest_news, scrape_article, ScrapeResult  # noqa: E402
+from .ui.router import router as ui_router, auth as ui_auth  # noqa: E402
+from .logging_filters import CredentialFilter  # noqa: E402
 
 logging.basicConfig(level=logging.INFO)
+for _handler in logging.getLogger().handlers:
+    _handler.addFilter(CredentialFilter())
 logger = logging.getLogger(__name__)
 
 security = HTTPBearer(auto_error=False)
@@ -109,8 +125,6 @@ async def lifespan(app: FastAPI):
     metrics_purge_task = asyncio.create_task(_purge_old_metrics_periodically())
 
     try:
-        import subprocess
-
         logger.info("Verifica/Installazione automatica di Playwright Chromium...")
         subprocess.run(
             [sys.executable, "-m", "playwright", "install", "chromium"],
@@ -119,7 +133,7 @@ async def lifespan(app: FastAPI):
             check=True,
         )
         logger.info("Playwright Chromium pronto.")
-    except Exception as e:
+    except (subprocess.CalledProcessError, OSError) as e:
         logger.warning(
             "Installazione automatica Playwright fallita (continua comunque): %s", e
         )
@@ -147,7 +161,9 @@ _UI_SOCKET_PREFIX = "/ui/socket.io"
 
 
 @app.middleware("http")
-async def ui_auth_gate(request: Request, call_next):
+async def ui_auth_gate(
+    request: Request, call_next: Callable[[Request], Coroutine[Any, Any, Any]]
+) -> Any:
     path = request.url.path
     if not path.startswith("/ui"):
         return await call_next(request)
@@ -224,7 +240,7 @@ def _run_scrape_sync(
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
-        async def _run():
+        async def _run() -> Any:
             start = time.time()
             result: Optional[ScrapeResult] = None
             status_str = "ok"
@@ -315,3 +331,28 @@ from .ui import pages as _ui_pages  # noqa: F401, E402 — registers @ui.page de
 
 _fastapi_app = app  # keep explicit reference before ui.run_with shadows nothing
 ui.run_with(_fastapi_app, mount_path="/ui", storage_secret=ui_auth._secret + "_ng")
+
+
+if __name__ == "__main__":
+    default_port = int(os.getenv("PORT", "8088"))
+    default_host = os.getenv("HOST", "0.0.0.0")
+    default_dev = os.getenv("DEV", "false").lower() in ("true", "1", "yes")
+
+    parser = argparse.ArgumentParser(
+        description="news-scraper — FastAPI microservice per scraping news"
+    )
+    parser.add_argument("--port", type=int, default=default_port)
+    parser.add_argument("--host", type=str, default=default_host)
+    parser.add_argument("--dev", action="store_true", default=default_dev)
+    parser.add_argument("--env-file", type=str, default=None)
+    args = parser.parse_args()
+
+    # loop="asyncio" preserves the WindowsProactorEventLoopPolicy set above —
+    # required for Playwright subprocess support. Do not change to "auto"/"uvloop".
+    uvicorn.run(
+        "app.main:app",
+        host=args.host,
+        port=args.port,
+        reload=args.dev,
+        loop="asyncio",
+    )

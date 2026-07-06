@@ -65,7 +65,7 @@ class ConfigManager:
                 for k, v in overrides.items():
                     if v is not None:
                         merged[k] = str(v)
-            except Exception as e:
+            except (OSError, ValueError) as e:
                 logger.warning("Cannot read config override: %s", e)
         self._cache = merged
 
@@ -102,7 +102,7 @@ class ConfigManager:
         if _OVERRIDE_FILE.exists():
             try:
                 overrides = json.loads(_OVERRIDE_FILE.read_text(encoding="utf-8"))
-            except Exception:
+            except (OSError, ValueError):
                 pass
 
         for key, value in updates.items():

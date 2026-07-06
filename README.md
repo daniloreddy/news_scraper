@@ -54,7 +54,7 @@ curl -O https://raw.githubusercontent.com/daniloreddy/news_scraper/main/docker-c
 
 ```env
 # Host port the service listens on (change if 8088 is already taken)
-APP_PORT=8088
+PORT=8088
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_API_KEY=your-api-key-here
 LLM_MODEL=gpt-4o-mini
@@ -83,7 +83,7 @@ docker compose up -d
 docker exec -it news-scraper python scripts/set_password.py
 ```
 
-The service will be available at `http://localhost:8088` (or whatever `APP_PORT` you set).
+The service will be available at `http://localhost:8088` (or whatever `PORT` you set).
 The monitoring dashboard is at `http://localhost:8088/ui/`.
 
 **Update image**

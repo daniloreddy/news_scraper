@@ -89,7 +89,7 @@ def _save_debug_file(filename: str, content: str) -> None:
         with open(filepath, "w", encoding="utf-8") as f:
             f.write(content)
         logger.info("[DEBUG] File salvato: %s", filepath)
-    except Exception as e:
+    except OSError as e:
         logger.warning("Impossibile salvare il file di debug %s: %s", filename, e)
 
 
@@ -164,7 +164,7 @@ async def _call_llm_api(messages: list) -> _LLMResult:
         try:
             err_body = resp.json()
             err_msg = err_body.get("error", {}).get("message") or resp.text
-        except Exception:
+        except (ValueError, AttributeError):
             err_msg = resp.text[:300]
         logger.error(
             "LLM %s %s: %s", resp.status_code, config.get("LLM_BASE_URL"), err_msg

@@ -79,7 +79,7 @@ class AuthManager:
         if self._file.exists():
             try:
                 return json.loads(self._file.read_text(encoding="utf-8"))
-            except Exception:
+            except (OSError, ValueError):
                 pass
         return {}
 
@@ -131,7 +131,7 @@ class AuthManager:
         try:
             jwt.decode(token, self._secret, algorithms=["HS256"])
             return True
-        except Exception:
+        except jwt.InvalidTokenError:
             return False
 
     def purge_expired_blocks(self) -> None:

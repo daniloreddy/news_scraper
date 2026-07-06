@@ -14,12 +14,16 @@ venv\Scripts\python scripts\set_password.py
 scripts\run.bat            # Windows
 bash scripts/run.sh        # Linux/macOS
 ```
-Starts uvicorn with `--reload` on `APP_PORT` from `.env` (default 8088 if unset/no `.env`). Auto-creates the venv and installs deps on first run.
+Runs `python -m app.main --dev`, which starts uvicorn with `--reload` on `PORT` from `.env` (default 8088 if unset/no `.env`). Auto-creates the venv and installs deps on first run.
 
 **Run locally (manual):**
 ```
-venv\Scripts\python -m uvicorn app.main:app --reload --port 8088 --loop asyncio
+venv\Scripts\python -m app.main --dev --port 8088
+venv\Scripts\python -m app.main --dev --env-file .env.staging   # custom env file
 ```
+`app/main.py` has a two-stage argparse: a stage-1 parser (module import time) loads `--env-file` (default: nearest `.env`) before any other env var is read, and a stage-2 parser (`if __name__ == "__main__":`) resolves `--port`/`--host`/`--dev` with precedence CLI flag > env var (`PORT`/`HOST`/`DEV`) > hardcoded default, then calls `uvicorn.run(..., loop="asyncio")` — `loop="asyncio"` is required to preserve the `WindowsProactorEventLoopPolicy` set for Playwright; do not change it.
+
+Invoking `uvicorn app.main:app --reload --port 8088 --loop asyncio` directly (bypassing `python -m app.main`) still works — the stage-1 parser tolerates unrecognized argv — but only the `python -m app.main` form honors `--env-file`/`--dev`/`--host` overrides.
 
 **Install deps (dev deps needed for quality checks):**
 ```
@@ -27,10 +31,12 @@ venv\Scripts\pip install -r requirements.txt -r requirements.dev.txt
 venv\Scripts\playwright install chromium
 ```
 
-**Test API interactively:**
+**Test API (health + scrape via curl):**
+```bat
+scripts\test_scraper.bat            # Windows
+bash scripts/test_scraper.sh        # Linux/macOS
 ```
-venv\Scripts\python scripts/test_api.py
-```
+Env vars: `TOKEN`, `HOST` (default `localhost`), `PORT` (default `8088`), `SCRAPE_URL`, `MAX_ARTICLES`.
 
 **Quality checks (ruff + mypy + pytest):**
 ```bat
@@ -47,7 +53,7 @@ docker compose up -d
 ```
 docker compose -f docker-compose-dev.yml up --build
 ```
-Both map host:`APP_PORT` (default 8088, set in `.env`) → container:8000. Requires 512MB shm for Chromium. Bind mounts: `./data:/app/data` (runtime data) and `./debug:/app/debug` (DEBUG artifacts).
+Both map host:`PORT` (default 8088, set in `.env`) → container:8000. Requires 512MB shm for Chromium. Bind mounts: `./data:/app/data` (runtime data) and `./debug:/app/debug` (DEBUG artifacts).
 
 ## Architecture
 
@@ -84,7 +90,7 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 
 - **Windows event loop:** ProactorEventLoop required for Playwright on Windows. Set via `asyncio.set_event_loop_policy` in `main.py` before app startup. Do not change this.
 - **Sync endpoints:** FastAPI routes use `asyncio.new_event_loop()` + `loop.run_until_complete()` in worker threads to bridge sync HTTP handling with async Playwright. Don't convert endpoints to `async def`.
-- **Module execution:** `app/main.py` uses relative imports. Must be run as `uvicorn app.main:app`, not `python app/main.py`.
+- **Module execution:** `app/main.py` uses relative imports. Must be run as `uvicorn app.main:app` or `python -m app.main`, not `python app/main.py` (breaks relative imports).
 - **No CSS selectors / XPath:** Scraping is LLM-driven by design. Don't add selector-based fallbacks.
 - **No openai SDK:** LLM calls use `httpx` POST directly to the OpenAI-compatible endpoint. Do not use `from openai import ...`.
 - **LLM response parsing:** Strip markdown code fences before `json.loads()` — some models wrap JSON in ```json blocks.
@@ -101,7 +107,7 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 ## Environment Variables
 
 See `.env.example`. Key vars:
-- `APP_PORT` — host listen port (default 8088). Read only by `scripts/run.sh`, `scripts/run.bat` and `docker-compose*.yml` (`${APP_PORT:-8088}` in the `ports:` mapping) — not read by the Python app itself. Restart/re-`up` required to change.
+- `PORT` — host listen port (default 8088). Used by `docker-compose*.yml` (`${PORT:-8088}` in the `ports:` mapping and Dockerfile `CMD`) and, for local dev, as the `--port` default in `app/main.py`'s `__main__` block (only when run via `python -m app.main`; `--port` CLI flag overrides it). Restart/re-`up` required to change.
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TEMPERATURE`, `LLM_TIMEOUT`
 - `LLM_MAX_PROMPT_CHARS` — truncates markdown sent to LLM (default 8000 chars ≈ 2700 tokens)
 - `API_AUTH_TOKEN` — if set, all `/scrape*` endpoints require `Authorization: Bearer <token>`

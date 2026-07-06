@@ -4,12 +4,12 @@ services:
     container_name: news-scraper
     restart: unless-stopped
     ports:
-      - "${APP_PORT:-8088}:${APP_PORT:-8088}"   # host==container, entrambi da APP_PORT
+      - "${PORT:-8088}:${PORT:-8088}"   # host==container, entrambi da PORT
     env_file:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - APP_PORT=${APP_PORT:-8088}
+      - PORT=${PORT:-8088}
     # Playwright ha bisogno di /dev/shm abbastanza grande
     shm_size: "512m"
     volumes:

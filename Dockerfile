@@ -15,9 +15,9 @@ COPY scripts/ ./scripts/
 # Playwright: installa solo Chromium (più leggero)
 RUN playwright install chromium --with-deps
 
-# Porta di ascolto effettiva, sovrascrivibile a runtime via env APP_PORT
+# Porta di ascolto effettiva, sovrascrivibile a runtime via env PORT
 # (stesso var usato da scripts/run.sh|bat e da docker-compose*.yml).
-ENV APP_PORT=8088
+ENV PORT=8088
 EXPOSE 8088
 
-CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${APP_PORT:-8088}"]
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8088}"]

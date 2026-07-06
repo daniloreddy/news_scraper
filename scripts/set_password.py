@@ -20,12 +20,12 @@ def _bootstrap() -> None:
         sys.path.pop(0)
 
     if not _VENV_PYTHON.exists():
-        print("Creating venv...")
-        subprocess.run([sys.executable, "-m", "venv", str(_VENV_DIR)], check=True)
-        subprocess.run(
-            [str(_VENV_PYTHON), "-m", "pip", "install", "-r", str(_ROOT / "requirements.txt")],
-            check=True,
+        print(
+            f"Errore: venv non trovato in {_VENV_DIR}. "
+            f"Esegui prima scripts/run.{'bat' if sys.platform == 'win32' else 'sh'} "
+            "per crearlo, poi rilancia questo script."
         )
+        sys.exit(1)
     if Path(sys.executable).resolve() != _VENV_PYTHON.resolve():
         sys.exit(subprocess.run([str(_VENV_PYTHON), *sys.argv]).returncode)
 
