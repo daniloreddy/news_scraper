@@ -1,16 +1,18 @@
-import os
 import pytest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 
+from app.config import config
+
 # Must be set before app.scraper is imported; scraper.py reads LLM_API_KEY via
 # ConfigManager at call time, but .env may be missing this key in CI.
-os.environ.setdefault("LLM_API_KEY", "test-dummy")
+# ConfigManager reads only from .env (no OS env override), so patch the cache
+# directly rather than os.environ.
+config._cache.setdefault("LLM_API_KEY", "test-dummy")
 
 
 @pytest.fixture
 def client():
-    from app.config import config
     from app.main import app
 
     # Prevent lifespan from actually running `playwright install`.

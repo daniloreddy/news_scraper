@@ -25,6 +25,8 @@ venv\Scripts\python -m app.main --dev --env-file .env.staging   # custom env fil
 
 Invoking `uvicorn app.main:app --reload --port 8088 --loop asyncio` directly (bypassing `python -m app.main`) still works — the stage-1 parser tolerates unrecognized argv — but only the `python -m app.main` form honors `--env-file`/`--dev`/`--host` overrides.
 
+`app/config.py`'s `ConfigManager` resolves `--env-file` independently (own lightweight argv parse, same default-to-nearest-`.env` fallback) so it agrees with `main.py` on which file to read regardless of import order — this is also the file it polls for hot-reload and writes to via the UI config editor.
+
 **Install deps (dev deps needed for quality checks):**
 ```
 venv\Scripts\pip install -r requirements.txt -r requirements.dev.txt
@@ -53,7 +55,7 @@ docker compose up -d
 ```
 docker compose -f docker-compose-dev.yml up --build
 ```
-Both map host:`PORT` (default 8088, set in `.env`) → container:8000. Requires 512MB shm for Chromium. Bind mounts: `./data:/app/data` (runtime data) and `./debug:/app/debug` (DEBUG artifacts).
+Both map host:`PORT` (default 8088, set in `.env`) → container:8000. Requires 512MB shm for Chromium. Bind mounts: `./.env:/app/.env` (config — same file read/written by `ConfigManager` as in local dev, see below), `./data:/app/data` (runtime data) and `./debug:/app/debug` (DEBUG artifacts). `.env` must exist on the host before `docker compose up` — Docker creates an empty directory instead of erroring if a bind-mounted file source is missing. Config no longer arrives via `env_file`/OS env vars — the container reads `.env` directly off the bind mount, so UI edits and hot-reload work identically in Docker and local dev.
 
 ## Architecture
 
@@ -61,7 +63,7 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 
 - `app/main.py` — HTTP layer. Scraping endpoints (`/scrape`, `/scrape/article` share the `_run_scrape_sync()` helper), auth middleware, NiceGUI mount.
 - `app/scraper.py` — Scraping logic. Playwright → BeautifulSoup → MarkItDown → LLM. Browser/page launch shared via `_new_browser_page()`; HTML→Markdown conversion in-memory via `_html_to_markdown()` (`markitdown.convert_stream`, no temp files).
-- `app/config.py` — ConfigManager singleton. `.env` baseline + `data/config.json` runtime overrides.
+- `app/config.py` — ConfigManager singleton. `.env` is the single source of truth (defaults + `.env` only, no OS env override, no separate JSON override file); resolves its own `--env-file` path (mirrors `main.py`'s stage-1 parser) and hot-reloads by polling the file's mtime.
 - `app/metrics.py` — MetricsDB. SQLite via aiosqlite. Records each request with token counts; `purge_old()` prunes records past `METRICS_RETENTION_DAYS`.
 - `app/net.py` — Shared client-IP resolution (`resolve_client_ip()`, `trusted_proxies()`), used by both `main.py` (rate limiting) and `ui/auth.py` (login rate limiting).
 - `app/ui/auth.py` — AuthManager for dashboard (scrypt password, JWT cookie).
@@ -80,7 +82,9 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 
 **LLM integration:** Direct `httpx` HTTP POST to `{LLM_BASE_URL}/chat/completions` (OpenAI-compatible). No openai SDK. Supports Ollama, LM Studio, any compatible endpoint. Config via `app/config.py` ConfigManager — hot-reload without restart.
 
-**Config hot reload:** `data/config.json` overrides `.env` at runtime. LLM params are read from ConfigManager on every call (a fresh httpx client is created per request in `scraper._call_llm_api`), so changes apply immediately. `RATE_LIMIT` requires restart.
+**Config hot reload:** the UI config editor (`/ui/config`) writes changes directly into `.env` via `python-dotenv`'s `set_key()` (preserves comments/order) and updates the in-process cache immediately. A background task in `main.py`'s lifespan polls `.env`'s mtime every 5s and reloads `ConfigManager` if it changed — this also picks up manual edits (e.g. `docker exec` + editor), no restart needed. LLM params are read from ConfigManager on every call (a fresh httpx client is created per request in `scraper._call_llm_api`), so changes apply immediately. `RATE_LIMIT` is also re-evaluated per-request (passed to slowapi as a dynamic lambda) — hot-reload, no restart. The only settings that still require a restart are `PORT`/`HOST`/`DEV`, since they're read once in `main.py`'s `__main__` block to bind the socket.
+
+**Upgrading from `data/config.json`:** older deployments may have a `data/config.json` override file (pre-hot-reload). On first boot after upgrading, `ConfigManager` migrates its values into `.env` (via `set_key`) and renames the file to `data/config.json.migrated` so it isn't re-read. In Docker this writes to the bind-mounted host `.env` (see Commands above) — the file survives container restarts like any other bind mount.
 
 **Debug mode:** Set `DEBUG=true` in `.env` or via UI → saves HTML, Markdown, LLM responses to `debug/`.
 
@@ -101,8 +105,8 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 ## Runtime data (gitignored)
 
 - `data/metrics.db` — SQLite request history
-- `data/config.json` — runtime config overrides (priority over .env)
 - `data/auth.json` — dashboard password hash + JWT secret
+- `data/config.json.migrated` — present only after upgrading from the old JSON-override scheme; harmless, safe to delete once confirmed `.env` has the migrated values
 
 ## Environment Variables
 
@@ -112,10 +116,10 @@ See `.env.example`. Key vars:
 - `LLM_MAX_PROMPT_CHARS` — truncates markdown sent to LLM (default 8000 chars ≈ 2700 tokens)
 - `API_AUTH_TOKEN` — if set, all `/scrape*` endpoints require `Authorization: Bearer <token>`
 - `SCRAPE_TIMEOUT` — global scraping timeout in seconds (default 300)
-- `RATE_LIMIT` — per-IP rate limit (default `20/minute`), requires restart to change
+- `RATE_LIMIT` — per-IP rate limit (default `20/minute`), hot-reload (re-evaluated per-request), no restart needed
 - `METRICS_RETENTION_DAYS` — days of request history kept in `data/metrics.db` before pruning (default 30), checked every 6h, no restart needed
 - `DEBUG` — saves debug artifacts to `debug/`
-- `TRUSTED_PROXIES` — comma-separated IPs allowed to set `CF-Connecting-IP`/`X-Real-IP`/`X-Forwarded-For` for client IP resolution (default `127.0.0.1`). Requires restart to change.
-- `AUTH_SECURE_COOKIE` — set to `1` to force the `Secure` flag on the dashboard session cookie (auto-enabled behind HTTPS proxies via `X-Forwarded-Proto`).
+- `TRUSTED_PROXIES` — comma-separated IPs allowed to set `CF-Connecting-IP`/`X-Real-IP`/`X-Forwarded-For` for client IP resolution (default `127.0.0.1`). Hot-reload, no restart needed.
+- `AUTH_SECURE_COOKIE` — set to `1`/`true`/`yes` to force the `Secure` flag on the dashboard session cookie (auto-enabled behind HTTPS proxies via `X-Forwarded-Proto`). Hot-reload, no restart needed.
 
-Note: `ConfigManager._load()` calls `load_dotenv()`, so `.env` values are also exported to `os.environ` (without overriding existing vars) — required by `TRUSTED_PROXIES`/`AUTH_SECURE_COOKIE`, which are read via `os.getenv` outside ConfigManager.
+Note: all config keys above are read exclusively through `ConfigManager` (`.env` + hardcoded defaults) — there is no OS-environment-variable override layer and no separate JSON override file. `TRUSTED_PROXIES`/`AUTH_SECURE_COOKIE` used to be read via raw `os.getenv` outside ConfigManager (frozen at boot); they were migrated onto `ConfigManager` so they hot-reload like everything else.

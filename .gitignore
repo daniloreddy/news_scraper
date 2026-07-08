@@ -26,4 +26,5 @@ temp_*.html
 # Runtime data (generated at startup)
 data/metrics.db
 data/config.json
+data/config.json.migrated
 data/auth.json

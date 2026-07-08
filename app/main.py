@@ -118,11 +118,18 @@ async def _purge_old_metrics_periodically() -> None:
         await metrics.purge_old(config.get_int("METRICS_RETENTION_DAYS", 30))
 
 
+async def _reload_config_periodically() -> None:
+    while True:
+        await asyncio.sleep(5)
+        config.reload_if_stale()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await metrics.init_db()
     purge_task = asyncio.create_task(_purge_ui_auth_blocks_periodically())
     metrics_purge_task = asyncio.create_task(_purge_old_metrics_periodically())
+    config_reload_task = asyncio.create_task(_reload_config_periodically())
 
     try:
         logger.info("Verifica/Installazione automatica di Playwright Chromium...")
@@ -140,6 +147,7 @@ async def lifespan(app: FastAPI):
     yield
     purge_task.cancel()
     metrics_purge_task.cancel()
+    config_reload_task.cancel()
 
 
 app = FastAPI(

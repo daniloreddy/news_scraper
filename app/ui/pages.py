@@ -230,9 +230,11 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
         with ui.row().classes("items-center q-gutter-sm"):
             ui.label("Legenda:").classes("text-caption text-grey-6")
             ui.badge("hot-reload").props("color=positive")
-            ui.badge("richiede restart").props("color=warning")
         ui.label(
             "Lascia vuoto i campi segreto per mantenere il valore esistente."
+        ).classes("text-caption text-grey-6")
+        ui.label(
+            "Le modifiche vengono scritte direttamente in .env ed effettive entro ~5s, senza restart."
         ).classes("text-caption text-grey-6")
 
         cur = config.get_public()
@@ -316,9 +318,7 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                 ui.badge("hot-reload").props("color=positive")
             ui.separator().classes("q-mb-sm")
 
-            with ui.row().classes("items-center q-gutter-sm q-mb-xs"):
-                ui.label("Rate Limit").classes("text-caption text-grey-6")
-                ui.badge("richiede restart").props("color=warning")
+            ui.label("Rate Limit").classes("text-caption text-grey-6 q-mb-xs")
             inp_rate_limit = ui.input(
                 "Rate Limit", value=cur.get("RATE_LIMIT", "")
             ).classes("full-width")

@@ -1,12 +1,12 @@
 """Shared client-IP resolution for rate limiting and auth (main.py + ui/auth.py)."""
 
-import os
-
 from fastapi import Request
+
+from .config import config
 
 
 def trusted_proxies() -> set[str]:
-    raw = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
+    raw = config.get("TRUSTED_PROXIES", "127.0.0.1")
     return {p.strip() for p in raw.split(",") if p.strip()}
 
 

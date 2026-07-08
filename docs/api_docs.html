@@ -231,8 +231,7 @@
     <div class="endpoint ui">
         <h3 class="ui-h3"><span class="method">GET</span> <span class="url">/ui/config</span> <span class="badge ui-auth">Cookie</span></h3>
         <p>Editor configurazione con hot reload. Modifica LLM (base URL, API key, modello, temperature, timeout, max prompt chars), Scraping (timeout, debug mode), Interfaccia (auto-refresh), API (rate limit, auth token).</p>
-        <p>Le modifiche LLM sono attive immediatamente. <code>RATE_LIMIT</code> richiede restart.</p>
-        <p>Override salvati in <code>data/config.json</code> — priorità su <code>.env</code>.</p>
+        <p>Le modifiche sono scritte direttamente in <code>.env</code> ed effettive entro ~5s (hot-reload), <code>RATE_LIMIT</code> incluso.</p>
     </div>
 
     <h2>Configurazione Runtime</h2>
@@ -246,9 +245,9 @@
         <tr><td><code>LLM_MAX_PROMPT_CHARS</code></td><td><code>8000</code></td><td>Tronca il markdown inviato all'LLM (~2700 token). Riduci se il server risponde "context exceeded"</td></tr>
         <tr><td><code>API_AUTH_TOKEN</code></td><td>—</td><td>Bearer token per endpoint /scrape*. Lascia vuoto per disabilitare</td></tr>
         <tr><td><code>SCRAPE_TIMEOUT</code></td><td><code>300</code></td><td>Timeout globale scraping in secondi (HTTP 504 al superamento)</td></tr>
-        <tr><td><code>RATE_LIMIT</code></td><td><code>20/minute</code></td><td>Rate limit per IP (formato: N/second|minute|hour). Richiede restart</td></tr>
-        <tr><td><code>TRUSTED_PROXIES</code></td><td><code>127.0.0.1</code></td><td>IP dei reverse proxy fidati da cui accettare CF-Connecting-IP / X-Real-IP / X-Forwarded-For. Richiede restart</td></tr>
-        <tr><td><code>AUTH_SECURE_COOKIE</code></td><td>—</td><td>Imposta a <code>1</code> per forzare il flag Secure sul cookie dashboard (auto dietro proxy HTTPS)</td></tr>
+        <tr><td><code>RATE_LIMIT</code></td><td><code>20/minute</code></td><td>Rate limit per IP (formato: N/second|minute|hour). Hot-reload</td></tr>
+        <tr><td><code>TRUSTED_PROXIES</code></td><td><code>127.0.0.1</code></td><td>IP dei reverse proxy fidati da cui accettare CF-Connecting-IP / X-Real-IP / X-Forwarded-For. Hot-reload</td></tr>
+        <tr><td><code>AUTH_SECURE_COOKIE</code></td><td>—</td><td>Imposta a <code>1</code> per forzare il flag Secure sul cookie dashboard (auto dietro proxy HTTPS). Hot-reload</td></tr>
         <tr><td><code>REFRESH_ENABLED</code></td><td><code>true</code></td><td>Auto-refresh della dashboard (hot-reload)</td></tr>
         <tr><td><code>REFRESH_INTERVAL</code></td><td><code>30</code></td><td>Intervallo auto-refresh in secondi (hot-reload)</td></tr>
         <tr><td><code>DEBUG</code></td><td><code>false</code></td><td>Salva HTML/MD/JSON in debug/ per analisi</td></tr>
@@ -258,7 +257,7 @@
     <ul>
         <li><strong>LLM integration:</strong> HTTP POST diretto a <code>{LLM_BASE_URL}/chat/completions</code> via httpx. Schema payload OpenAI-compatible con <code>response_format: json_object</code>.</li>
         <li><strong>Smart Scraping:</strong> Playwright → BeautifulSoup (normalizzazione) → MarkItDown (HTML→Markdown) → LLM (estrazione strutturata).</li>
-        <li><strong>Hot reload config:</strong> La UI scrive overrides in <code>data/config.json</code> con priorità su <code>.env</code>. I parametri LLM sono letti dal ConfigManager ad ogni chiamata (client httpx creato per richiesta), quindi le modifiche sono attive immediatamente.</li>
+        <li><strong>Hot reload config:</strong> <code>.env</code> è l'unica fonte di configurazione. La UI scrive le modifiche direttamente in <code>.env</code>; un task in background rilegge il file ogni 5s e applica i cambi (anche se editato a mano). I parametri LLM sono letti dal ConfigManager ad ogni chiamata (client httpx creato per richiesta), quindi le modifiche sono attive immediatamente.</li>
         <li><strong>Metriche:</strong> SQLite (<code>data/metrics.db</code>) — ogni request registra endpoint, URL, status, durata, token LLM prompt/completion.</li>
         <li><strong>Auth dashboard:</strong> Password hashed con scrypt (n=16384). Token JWT cookie HttpOnly. Rate limit: 5 tentativi/IP per 5 min, 20 globali/60s.</li>
         <li><strong>Timeout:</strong> <code>SCRAPE_TIMEOUT</code> configura il timeout globale. Al superamento: HTTP 504.</li>

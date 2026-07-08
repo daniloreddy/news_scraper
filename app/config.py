@@ -1,12 +1,12 @@
-"""ConfigManager: .env baseline + data/config.json runtime overrides."""
+"""ConfigManager: `.env` is the single source of truth, with file-watch hot-reload."""
 
+import argparse
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, Optional
 
-from dotenv import dotenv_values, load_dotenv
+from dotenv import dotenv_values, find_dotenv, set_key
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +24,25 @@ _DEFAULTS: dict[str, str] = {
     "DEBUG": "false",
     "REFRESH_ENABLED": "true",
     "REFRESH_INTERVAL": "30",
+    "TRUSTED_PROXIES": "127.0.0.1",
+    "AUTH_SECURE_COOKIE": "false",
 }
 
-_OVERRIDE_FILE = Path("data/config.json")
+_LEGACY_OVERRIDE_FILE = Path("data/config.json")
 _SECRET_KEYS = {"LLM_API_KEY", "API_AUTH_TOKEN"}
 _MASK = "••••••"
+
+
+def _resolve_env_path() -> Path:
+    """Resolve the `.env` path from `--env-file`, mirroring main.py's stage-1
+    parser so both modules agree on the same file regardless of import order."""
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--env-file", type=str, default=None)
+    args, _ = parser.parse_known_args()
+    if args.env_file:
+        return Path(args.env_file)
+    found = find_dotenv(usecwd=True)
+    return Path(found) if found else Path(".env")
 
 
 class ConfigManager:
@@ -36,38 +50,66 @@ class ConfigManager:
 
     _instance: Optional["ConfigManager"] = None
     _cache: dict[str, str]
+    _env_path: Path
+    _last_mtime: float
 
     def __new__(cls) -> "ConfigManager":
         if cls._instance is None:
             cls._instance = super().__new__(cls)
             cls._instance._cache = {}
+            cls._instance._env_path = _resolve_env_path()
+            cls._instance._last_mtime = 0.0
+            cls._instance._migrate_legacy_override_file()
             cls._instance._load()
         return cls._instance
 
+    def _migrate_legacy_override_file(self) -> None:
+        """One-shot migration for upgrades: fold values from the retired
+        data/config.json override file into .env, then rename it so it isn't
+        picked up again on the next boot."""
+        if not _LEGACY_OVERRIDE_FILE.exists():
+            return
+        try:
+            overrides: dict[str, Any] = json.loads(
+                _LEGACY_OVERRIDE_FILE.read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as e:
+            logger.warning("Cannot read legacy config override: %s", e)
+            return
+        for key, value in overrides.items():
+            if value is not None:
+                set_key(str(self._env_path), key, str(value), quote_mode="never")
+        migrated_path = _LEGACY_OVERRIDE_FILE.with_name("config.json.migrated")
+        _LEGACY_OVERRIDE_FILE.rename(migrated_path)
+        logger.warning(
+            "Migrato override legacy %s in %s (rinominato in %s).",
+            _LEGACY_OVERRIDE_FILE,
+            self._env_path,
+            migrated_path,
+        )
+
     def _load(self) -> None:
-        # Export .env into os.environ (no override) so vars read via os.getenv
-        # outside ConfigManager (TRUSTED_PROXIES, AUTH_SECURE_COOKIE) work in local dev.
-        load_dotenv()
         merged = dict(_DEFAULTS)
-        # .env file (local dev)
-        for k, v in dotenv_values().items():
+        for k, v in dotenv_values(str(self._env_path)).items():
             if v is not None:
                 merged[k] = v
-        # OS environment variables — takes precedence (Docker / systemd / shell exports)
-        for k in _DEFAULTS:
-            if k in os.environ:
-                merged[k] = os.environ[k]
-        if _OVERRIDE_FILE.exists():
-            try:
-                overrides: dict[str, Any] = json.loads(
-                    _OVERRIDE_FILE.read_text(encoding="utf-8")
-                )
-                for k, v in overrides.items():
-                    if v is not None:
-                        merged[k] = str(v)
-            except (OSError, ValueError) as e:
-                logger.warning("Cannot read config override: %s", e)
         self._cache = merged
+        try:
+            self._last_mtime = self._env_path.stat().st_mtime
+        except OSError:
+            self._last_mtime = 0.0
+
+    def reload_if_stale(self) -> bool:
+        """Reload from disk if `.env` changed since the last load. Returns True if reloaded."""
+        try:
+            mtime = self._env_path.stat().st_mtime
+        except OSError:
+            return False
+        if mtime == self._last_mtime:
+            return False
+        self._load()
+        logger.info("Config ricaricata da %s (hot-reload).", self._env_path)
+        return True
 
     def get(self, key: str, default: str = "") -> str:
         return self._cache.get(key, default)
@@ -85,7 +127,7 @@ class ConfigManager:
             return default
 
     def get_bool(self, key: str) -> bool:
-        return self._cache.get(key, "false").lower() == "true"
+        return self._cache.get(key, "false").strip().lower() in ("true", "1", "yes")
 
     def get_public(self) -> dict[str, str]:
         """Config dict with secrets replaced by mask for UI display."""
@@ -96,23 +138,17 @@ class ConfigManager:
         return result
 
     def update_many(self, updates: dict[str, str]) -> None:
-        """Persist updates to override file. Blank or mask value = keep existing secret."""
-        _OVERRIDE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        overrides: dict[str, Any] = {}
-        if _OVERRIDE_FILE.exists():
-            try:
-                overrides = json.loads(_OVERRIDE_FILE.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
-
+        """Persist updates directly to `.env`. Blank or mask value = keep existing secret."""
         for key, value in updates.items():
             stripped = value.strip()
             if not stripped or stripped == _MASK:
                 continue
-            overrides[key] = stripped
+            set_key(str(self._env_path), key, stripped, quote_mode="never")
             self._cache[key] = stripped
-
-        _OVERRIDE_FILE.write_text(json.dumps(overrides, indent=2), encoding="utf-8")
+        try:
+            self._last_mtime = self._env_path.stat().st_mtime
+        except OSError:
+            pass
 
 
 config = ConfigManager()

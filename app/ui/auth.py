@@ -3,7 +3,6 @@
 import hashlib
 import json
 import logging
-import os
 import secrets
 import time
 from pathlib import Path
@@ -13,6 +12,7 @@ import jwt
 from fastapi import Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 
+from ..config import config
 from ..net import resolve_client_ip
 
 logger = logging.getLogger(__name__)
@@ -139,7 +139,7 @@ class AuthManager:
         self._rl.purge_expired()
 
     def _is_secure(self, request: Request) -> bool:
-        if os.getenv("AUTH_SECURE_COOKIE") == "1":
+        if config.get_bool("AUTH_SECURE_COOKIE"):
             return True
         return request.headers.get("x-forwarded-proto") == "https"
 
