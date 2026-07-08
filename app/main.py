@@ -41,6 +41,13 @@ load_dotenv(_env_args.env_file)
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+# Must run before any app-internal import below: importing .config triggers
+# ConfigManager()'s singleton __new__ as a side effect, which logs at INFO/WARNING
+# level — without basicConfig() first, the root logger has no level/handler yet
+# and those messages are silently dropped (observed in production: the "using
+# .env=..." startup log never appeared, even though the config was loading fine).
+logging.basicConfig(level=logging.INFO)
+
 from .config import config  # noqa: E402 — must follow stage-1 load_dotenv() above
 from . import metrics  # noqa: E402
 from .metrics import RequestRecord  # noqa: E402
@@ -49,7 +56,6 @@ from .scraper import scrape_latest_news, scrape_article, ScrapeResult  # noqa: E
 from .ui.router import router as ui_router, auth as ui_auth  # noqa: E402
 from .logging_filters import CredentialFilter  # noqa: E402
 
-logging.basicConfig(level=logging.INFO)
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(CredentialFilter())
 logger = logging.getLogger(__name__)
