@@ -98,6 +98,7 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 - **No CSS selectors / XPath:** Scraping is LLM-driven by design. Don't add selector-based fallbacks.
 - **No openai SDK:** LLM calls use `httpx` POST directly to the OpenAI-compatible endpoint. Do not use `from openai import ...`.
 - **LLM response parsing:** Strip markdown code fences before `json.loads()` — some models wrap JSON in ```json blocks.
+- **Timezone-aware timestamps:** Any code formatting a timestamp for display must use `zoneinfo.ZoneInfo(config.get("TZ", "UTC"))`, never bare `datetime.now()`/`datetime.fromtimestamp()` (those use the OS/container local time, which defaults to UTC and silently ignores the user's actual timezone). Stored timestamps stay as raw `time.time()` epoch floats (timezone-agnostic by definition) — only the display layer needs `zoneinfo`. Requires the `tzdata` package (in `requirements.txt`) since Windows has no built-in IANA tz database.
 - **NiceGUI import order:** `from .ui import pages as _ui_pages` must be imported BEFORE `ui.run_with(app)` and must NOT use `import app.ui.pages` (absolute import shadows the `app = FastAPI(...)` variable).
 - **NiceGUI navigation paths:** `ui.navigate.to()` prepends the mount path `/ui` automatically. Use paths relative to the NiceGUI root (e.g. `/config` not `/ui/config`). To navigate to FastAPI routes use `ui.run_javascript("window.location.href='/route'")`.
 - **NiceGUI dark mode persistence:** Use `from nicegui import app as ng_app` and `ng_app.storage.user` — never `ui.dark_mode(True)` hardcoded (resets theme on every page load). `ui.storage` does not exist.
@@ -121,5 +122,6 @@ See `.env.example`. Key vars:
 - `DEBUG` — saves debug artifacts to `debug/`
 - `TRUSTED_PROXIES` — comma-separated IPs allowed to set `CF-Connecting-IP`/`X-Real-IP`/`X-Forwarded-For` for client IP resolution (default `127.0.0.1`). Hot-reload, no restart needed.
 - `AUTH_SECURE_COOKIE` — set to `1`/`true`/`yes` to force the `Secure` flag on the dashboard session cookie (auto-enabled behind HTTPS proxies via `X-Forwarded-Proto`). Hot-reload, no restart needed.
+- `TZ` — IANA timezone name (e.g. `Europe/Rome`, default `UTC`) used to render dashboard timestamps (`app/ui/pages.py` via `zoneinfo.ZoneInfo`, falls back to UTC with a logged warning if invalid). Also passed to the Docker container's `environment:` for the container's own OS-level clock. App-side use is hot-reload; the container OS clock only picks up a changed `TZ` on container restart.
 
 Note: all config keys above are read exclusively through `ConfigManager` (`.env` + hardcoded defaults) — there is no OS-environment-variable override layer and no separate JSON override file. `TRUSTED_PROXIES`/`AUTH_SECURE_COOKIE` used to be read via raw `os.getenv` outside ConfigManager (frozen at boot); they were migrated onto `ConfigManager` so they hot-reload like everything else.

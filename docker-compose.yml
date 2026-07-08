@@ -8,6 +8,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PORT=${PORT:-8088}
+      - TZ=${TZ:-UTC}
     # Playwright ha bisogno di /dev/shm abbastanza grande
     shm_size: "512m"
     volumes:

@@ -8,6 +8,7 @@ services:
     environment:
       - PYTHONUNBUFFERED=1
       - PORT=${PORT:-8088}
+      - TZ=${TZ:-UTC}
     shm_size: "512m"
     volumes:
       - ./.env:/app/.env

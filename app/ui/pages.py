@@ -1,8 +1,10 @@
 """NiceGUI dashboard pages: monitoring + config."""
 
 import datetime
+import logging
 from collections.abc import Callable
 from typing import Any, Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Request
 from fastapi.responses import RedirectResponse
@@ -12,6 +14,8 @@ from nicegui import ui
 from .. import metrics as mdb
 from ..config import config
 from .router import auth
+
+logger = logging.getLogger(__name__)
 
 _APP_NAME: str = "News Scraper"
 _NAV_ITEMS: list[tuple[str, str, str]] = [
@@ -24,8 +28,17 @@ def _check_auth(request: Request) -> bool:
     return auth.verify_token(request.cookies.get(auth.cookie_name, ""))
 
 
+def _get_tz() -> ZoneInfo:
+    tz_name = config.get("TZ", "UTC")
+    try:
+        return ZoneInfo(tz_name)
+    except (ZoneInfoNotFoundError, ValueError):
+        logger.warning("TZ '%s' non valido, uso UTC.", tz_name)
+        return ZoneInfo("UTC")
+
+
 def _fmt_ts(ts: float) -> str:
-    return datetime.datetime.fromtimestamp(ts).strftime("%d/%m %H:%M:%S")
+    return datetime.datetime.fromtimestamp(ts, tz=_get_tz()).strftime("%d/%m %H:%M:%S")
 
 
 def _metric_card(label: str, value: str, color: str = "primary") -> None:
@@ -195,7 +208,7 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
                 )
                 tbl.run_method("$forceUpdate")
 
-            now = datetime.datetime.now().strftime("%H:%M:%S")
+            now = datetime.datetime.now(_get_tz()).strftime("%H:%M:%S")
             interval = config.get_int("REFRESH_INTERVAL", 30)
             refresh_label.set_text(f"Aggiornato: {now} · auto-refresh {interval}s")
 
@@ -310,6 +323,11 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                 .classes("full-width")
                 .props('hint="Secondi tra un aggiornamento automatico e il successivo"')
             )
+            inp_timezone = (
+                ui.input("Timezone", value=cur.get("TZ", "UTC"))
+                .classes("full-width")
+                .props('hint="Nome IANA, es. Europe/Rome. Usato per gli orari mostrati in dashboard."')
+            )
 
         with ui.card().classes("q-pa-md full-width"):
             with ui.row().classes("items-center q-mb-xs"):
@@ -346,6 +364,7 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                     "DEBUG": "true" if debug_switch.value else "false",
                     "REFRESH_ENABLED": "true" if refresh_switch.value else "false",
                     "REFRESH_INTERVAL": inp_refresh.value,
+                    "TZ": inp_timezone.value,
                     "RATE_LIMIT": inp_rate_limit.value,
                     "API_AUTH_TOKEN": inp_auth_token.value,
                 }

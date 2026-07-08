@@ -26,6 +26,7 @@ _DEFAULTS: dict[str, str] = {
     "REFRESH_INTERVAL": "30",
     "TRUSTED_PROXIES": "127.0.0.1",
     "AUTH_SECURE_COOKIE": "false",
+    "TZ": "UTC",
 }
 
 _LEGACY_OVERRIDE_FILE = Path("data/config.json")

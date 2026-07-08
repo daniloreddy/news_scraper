@@ -12,3 +12,4 @@ nicegui>=2.0.0
 aiosqlite>=0.20.0
 pyjwt>=2.8.0
 python-multipart>=0.0.9
+tzdata>=2024.1
