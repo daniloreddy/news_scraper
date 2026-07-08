@@ -11,6 +11,20 @@ from dotenv import dotenv_values, find_dotenv, set_key
 
 logger = logging.getLogger(__name__)
 
+# UI-editable vs manual-only rule (enforced by convention in app/ui/pages.py,
+# not validated here): a key belongs in the /config editor iff BOTH hold —
+# (1) hot-reload capable (applies without restart, i.e. lives in this dict), AND
+# (2) it is not a trust-boundary/security control over the dashboard's own
+#     session (TRUSTED_PROXIES, AUTH_SECURE_COOKIE are deliberately excluded
+#     from the UI even though hot-reload: the panel sits behind that same
+#     session, so a compromised dashboard cookie must not be able to weaken
+#     the auth protecting it). Manual .env edit only for those two.
+# PORT/HOST/DEV fail condition (1) entirely — read once in main.py's
+# __main__ block, not part of this dict, restart required.
+# Secrets (LLM_API_KEY, API_AUTH_TOKEN) don't trip condition (2): they're
+# credentials toward external parties (LLM provider, API callers), not
+# controls over the dashboard session itself — stay UI-editable via the
+# write-only masked pattern below (_SECRET_KEYS/get_public).
 _DEFAULTS: dict[str, str] = {
     "LLM_BASE_URL": "http://localhost:1234/v1",
     "LLM_API_KEY": "",
@@ -89,7 +103,9 @@ class ConfigManager:
         except (OSError, ValueError) as e:
             # Never let a migration hiccup (unwritable .env, malformed JSON, ecc.)
             # crash app boot — retried on the next start, legacy file untouched.
-            logger.warning("Migrazione data/config.json fallita, riprovo al prossimo avvio: %s", e)
+            logger.warning(
+                "Migrazione data/config.json fallita, riprovo al prossimo avvio: %s", e
+            )
             return
         logger.warning(
             "Migrato override legacy %s in %s (rinominato in %s).",

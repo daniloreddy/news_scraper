@@ -326,7 +326,9 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
             inp_timezone = (
                 ui.input("Timezone", value=cur.get("TZ", "UTC"))
                 .classes("full-width")
-                .props('hint="Nome IANA, es. Europe/Rome. Usato per gli orari mostrati in dashboard."')
+                .props(
+                    'hint="Nome IANA, es. Europe/Rome. Usato per gli orari mostrati in dashboard."'
+                )
             )
 
         with ui.card().classes("q-pa-md full-width"):
@@ -351,6 +353,24 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                 .props("type=password")
             )
 
+        with ui.card().classes("q-pa-md full-width"):
+            with ui.row().classes("items-center q-mb-xs"):
+                ui.label("Metriche").classes("text-caption text-grey-6 text-uppercase")
+                ui.space()
+                ui.badge("hot-reload").props("color=positive")
+            ui.separator().classes("q-mb-sm")
+
+            inp_retention = (
+                ui.input(
+                    "Retention metriche (giorni)",
+                    value=cur.get("METRICS_RETENTION_DAYS", "30"),
+                )
+                .classes("full-width")
+                .props(
+                    'hint="Giorni di storico richieste mantenuti in data/metrics.db prima della pulizia automatica."'
+                )
+            )
+
         async def save() -> None:
             try:
                 config.update_many(
@@ -368,10 +388,13 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                         "TZ": inp_timezone.value,
                         "RATE_LIMIT": inp_rate_limit.value,
                         "API_AUTH_TOKEN": inp_auth_token.value,
+                        "METRICS_RETENTION_DAYS": inp_retention.value,
                     }
                 )
             except OSError as e:
-                ui.notify(f"Errore scrittura .env: {e}", type="negative", position="top")
+                ui.notify(
+                    f"Errore scrittura .env: {e}", type="negative", position="top"
+                )
                 return
             inp_api_key.set_value("")
             inp_auth_token.set_value("")
