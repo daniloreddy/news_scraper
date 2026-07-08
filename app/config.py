@@ -66,6 +66,7 @@ class ConfigManager:
             cls._instance._cache = {}
             cls._instance._env_path = _resolve_env_path()
             cls._instance._last_mtime = 0.0
+            logger.info("Config: uso .env=%s", cls._instance._env_path)
             cls._instance._migrate_legacy_override_file()
             cls._instance._load()
         return cls._instance
@@ -98,6 +99,12 @@ class ConfigManager:
         )
 
     def _load(self) -> None:
+        if not self._env_path.exists():
+            logger.warning(
+                "File .env non trovato in %s — uso solo i default hardcoded "
+                "(controlla il bind-mount/ENV_FILE se questo gira in Docker).",
+                self._env_path,
+            )
         merged = dict(_DEFAULTS)
         for k, v in dotenv_values(str(self._env_path)).items():
             if v is not None:
