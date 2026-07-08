@@ -119,6 +119,8 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 
 See `.env.example`. Key vars:
 - `PORT` — host listen port (default 8088). Used by `docker-compose*.yml` (`${PORT:-8088}` in the `ports:` mapping and Dockerfile `CMD`) and, for local dev, as the `--port` default in `app/main.py`'s `__main__` block (only when run via `python -m app.main`; `--port` CLI flag overrides it). Restart/re-`up` required to change.
+- `HOST` — bare-metal-only bind address for local dev (default `127.0.0.1`, safe-by-default: reachable only from this machine). `--host` CLI flag overrides it. Set to `0.0.0.0` to expose on LAN. Not read in Docker (the container's `CMD` always hardcodes `--host 0.0.0.0` for Docker-networking reasons — see `BIND_HOST` below for the Docker-side exposure decision). Restart required.
+- `BIND_HOST` — Docker-only: the address `docker-compose.yml`'s `ports:` mapping publishes on (default `127.0.0.1`, safe-by-default). Set to `0.0.0.0` to expose on LAN / behind a reverse proxy on another host / directly on the internet. Not used by `docker-compose-dev.yml` (intentionally open on all interfaces for local manual testing). Requires `docker compose up` to re-apply.
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TEMPERATURE`, `LLM_TIMEOUT`
 - `LLM_MAX_PROMPT_CHARS` — truncates markdown sent to LLM (default 8000 chars ≈ 2700 tokens)
 - `API_AUTH_TOKEN` — if set, all `/scrape*` endpoints require `Authorization: Bearer <token>`

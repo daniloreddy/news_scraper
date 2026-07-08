@@ -349,7 +349,7 @@ ui.run_with(_fastapi_app, mount_path="/ui", storage_secret=ui_auth._secret + "_n
 
 if __name__ == "__main__":
     default_port = int(os.getenv("PORT", "8088"))
-    default_host = os.getenv("HOST", "0.0.0.0")
+    default_host = os.getenv("HOST", "127.0.0.1")
     default_dev = os.getenv("DEV", "false").lower() in ("true", "1", "yes")
 
     parser = argparse.ArgumentParser(
