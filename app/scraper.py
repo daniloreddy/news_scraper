@@ -320,14 +320,15 @@ async def _scrape_article_page(page: Page, url: str) -> dict:
         return og ? og.getAttribute('content') : null;
     }""")
 
-    if len(content) > 8000:
+    max_chars = config.get_int("LLM_MAX_PROMPT_CHARS", 8000)
+    if len(content) > max_chars:
         logger.warning(
-            "Contenuto articolo troncato a 8000 chars (originale: %d)", len(content)
+            "Contenuto articolo troncato a %d chars (originale: %d)", max_chars, len(content)
         )
     return {
         "title": title.split("—")[0].strip() if "—" in title else title.strip(),
         "url": url,
         "published_date": None,
-        "content": content[:8000],
+        "content": content[:max_chars],
         "thumbnail_url": thumbnail_url,
     }

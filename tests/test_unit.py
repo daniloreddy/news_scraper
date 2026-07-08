@@ -367,6 +367,15 @@ class TestScrapeArticlePage:
             result = self._run(page)
         assert len(result["content"]) == 8000
 
+    def test_content_truncation_respects_llm_max_prompt_chars_config(self):
+        from app.scraper import config, md_converter
+
+        page, mock_result = self._make_page("B" * 15000)
+        with patch.dict(config._cache, {"LLM_MAX_PROMPT_CHARS": "10000"}):
+            with patch.object(md_converter, "convert_stream", return_value=mock_result):
+                result = self._run(page)
+        assert len(result["content"]) == 10000
+
     def test_short_content_not_truncated(self):
         from app.scraper import md_converter
 
