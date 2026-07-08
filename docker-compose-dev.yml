@@ -10,6 +10,7 @@ services:
       - PORT=${PORT:-8088}
       - TZ=${TZ:-UTC}
       - ENV_FILE=/app/hostcfg/.env
+      - NICEGUI_STORAGE_PATH=/app/data/.nicegui
     shm_size: "512m"
     volumes:
       - .:/app/hostcfg

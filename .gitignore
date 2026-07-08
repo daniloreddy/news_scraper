@@ -28,3 +28,8 @@ data/metrics.db
 data/config.json
 data/config.json.migrated
 data/auth.json
+data/.nicegui/
+
+# NiceGUI local persistence (default path, local dev only — Docker uses
+# NICEGUI_STORAGE_PATH=/app/data/.nicegui, already covered above)
+.nicegui/

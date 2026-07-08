@@ -103,13 +103,15 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 - **Timezone-aware timestamps:** Any code formatting a timestamp for display must use `zoneinfo.ZoneInfo(config.get("TZ", "UTC"))`, never bare `datetime.now()`/`datetime.fromtimestamp()` (those use the OS/container local time, which defaults to UTC and silently ignores the user's actual timezone). Stored timestamps stay as raw `time.time()` epoch floats (timezone-agnostic by definition) — only the display layer needs `zoneinfo`. Requires the `tzdata` package (in `requirements.txt`) since Windows has no built-in IANA tz database.
 - **NiceGUI import order:** `from .ui import pages as _ui_pages` must be imported BEFORE `ui.run_with(app)` and must NOT use `import app.ui.pages` (absolute import shadows the `app = FastAPI(...)` variable).
 - **NiceGUI navigation paths:** `ui.navigate.to()` prepends the mount path `/ui` automatically. Use paths relative to the NiceGUI root (e.g. `/config` not `/ui/config`). To navigate to FastAPI routes use `ui.run_javascript("window.location.href='/route'")`.
-- **NiceGUI dark mode persistence:** Use `from nicegui import app as ng_app` and `ng_app.storage.user` — never `ui.dark_mode(True)` hardcoded (resets theme on every page load). `ui.storage` does not exist.
+- **NiceGUI dark mode persistence:** Use `from nicegui import app as ng_app` and `ng_app.storage.user` — never `ui.dark_mode(True)` hardcoded (resets theme on every page load). `ui.storage` does not exist. Note this only persists the *value* correctly if `NICEGUI_STORAGE_PATH` itself survives a container recreate — see the Docker note below.
+- **NiceGUI storage path in Docker:** `app.storage.user` (dark mode, etc.) is written to disk at `NICEGUI_STORAGE_PATH` (default `.nicegui/`, relative to cwd — a NiceGUI-internal setting, unrelated to `ConfigManager`). In Docker this defaults to an ephemeral path inside the container filesystem, wiped on every `docker compose up`/container recreate — set `NICEGUI_STORAGE_PATH=/app/data/.nicegui` (both compose files already do) so it lands under the bind-mounted `./data`, or the theme (and any other per-user UI state) silently resets to default on every restart.
 
 ## Runtime data (gitignored)
 
 - `data/metrics.db` — SQLite request history
 - `data/auth.json` — dashboard password hash + JWT secret
 - `data/config.json.migrated` — present only after upgrading from the old JSON-override scheme; harmless, safe to delete once confirmed `.env` has the migrated values
+- `data/.nicegui/` — NiceGUI's `app.storage.user`/`app.storage.general` persistence (dark mode, etc.), see `NICEGUI_STORAGE_PATH` above
 
 ## Environment Variables
 
@@ -126,5 +128,6 @@ See `.env.example`. Key vars:
 - `AUTH_SECURE_COOKIE` — set to `1`/`true`/`yes` to force the `Secure` flag on the dashboard session cookie (auto-enabled behind HTTPS proxies via `X-Forwarded-Proto`). Hot-reload, no restart needed.
 - `TZ` — IANA timezone name (e.g. `Europe/Rome`, default `UTC`) used to render dashboard timestamps (`app/ui/pages.py` via `zoneinfo.ZoneInfo`, falls back to UTC with a logged warning if invalid). Also passed to the Docker container's `environment:` for the container's own OS-level clock. App-side use is hot-reload; the container OS clock only picks up a changed `TZ` on container restart.
 - `ENV_FILE` — Docker-only, **not** a `.env` entry itself: set in `docker-compose*.yml`'s `environment:` to `/app/hostcfg/.env`, tells `ConfigManager._resolve_env_path()` where to find `.env` inside the container (the Docker `CMD` invokes `uvicorn` directly, bypassing the `--env-file` CLI flag path used by local dev). Don't set this locally — leave `ConfigManager` to auto-discover `.env` via `--env-file`/nearest-file lookup.
+- `NICEGUI_STORAGE_PATH` — Docker-only, a NiceGUI-internal setting (read by the `nicegui` package itself, not `ConfigManager`): set in `docker-compose*.yml`'s `environment:` to `/app/data/.nicegui` so `app.storage.user` (dark mode, etc.) survives container recreates via the bind-mounted `./data`. Don't set this locally — NiceGUI's own default (`.nicegui/` relative to cwd) already persists fine across local dev restarts.
 
 Note: all config keys above are read exclusively through `ConfigManager` (`.env` + hardcoded defaults) — there is no OS-environment-variable override layer and no separate JSON override file. `TRUSTED_PROXIES`/`AUTH_SECURE_COOKIE` used to be read via raw `os.getenv` outside ConfigManager (frozen at boot); they were migrated onto `ConfigManager` so they hot-reload like everything else.
