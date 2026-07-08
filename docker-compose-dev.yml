@@ -9,8 +9,9 @@ services:
       - PYTHONUNBUFFERED=1
       - PORT=${PORT:-8088}
       - TZ=${TZ:-UTC}
+      - ENV_FILE=/app/hostcfg/.env
     shm_size: "512m"
     volumes:
-      - ./.env:/app/.env
+      - .:/app/hostcfg
       - ./data:/app/data
       - ./debug:/app/debug

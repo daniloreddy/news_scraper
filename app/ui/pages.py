@@ -352,23 +352,27 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
             )
 
         async def save() -> None:
-            config.update_many(
-                {
-                    "LLM_BASE_URL": inp_base_url.value,
-                    "LLM_API_KEY": inp_api_key.value,
-                    "LLM_MODEL": inp_model.value,
-                    "LLM_TEMPERATURE": inp_temp.value,
-                    "LLM_TIMEOUT": inp_llm_timeout.value,
-                    "LLM_MAX_PROMPT_CHARS": inp_max_prompt.value,
-                    "SCRAPE_TIMEOUT": inp_scrape_timeout.value,
-                    "DEBUG": "true" if debug_switch.value else "false",
-                    "REFRESH_ENABLED": "true" if refresh_switch.value else "false",
-                    "REFRESH_INTERVAL": inp_refresh.value,
-                    "TZ": inp_timezone.value,
-                    "RATE_LIMIT": inp_rate_limit.value,
-                    "API_AUTH_TOKEN": inp_auth_token.value,
-                }
-            )
+            try:
+                config.update_many(
+                    {
+                        "LLM_BASE_URL": inp_base_url.value,
+                        "LLM_API_KEY": inp_api_key.value,
+                        "LLM_MODEL": inp_model.value,
+                        "LLM_TEMPERATURE": inp_temp.value,
+                        "LLM_TIMEOUT": inp_llm_timeout.value,
+                        "LLM_MAX_PROMPT_CHARS": inp_max_prompt.value,
+                        "SCRAPE_TIMEOUT": inp_scrape_timeout.value,
+                        "DEBUG": "true" if debug_switch.value else "false",
+                        "REFRESH_ENABLED": "true" if refresh_switch.value else "false",
+                        "REFRESH_INTERVAL": inp_refresh.value,
+                        "TZ": inp_timezone.value,
+                        "RATE_LIMIT": inp_rate_limit.value,
+                        "API_AUTH_TOKEN": inp_auth_token.value,
+                    }
+                )
+            except OSError as e:
+                ui.notify(f"Errore scrittura .env: {e}", type="negative", position="top")
+                return
             inp_api_key.set_value("")
             inp_auth_token.set_value("")
             ui.notify("Configurazione salvata", type="positive", position="top")

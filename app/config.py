@@ -3,6 +3,7 @@
 import argparse
 import json
 import logging
+import os
 from pathlib import Path
 from typing import Any, Optional
 
@@ -35,8 +36,13 @@ _MASK = "••••••"
 
 
 def _resolve_env_path() -> Path:
-    """Resolve the `.env` path from `--env-file`, mirroring main.py's stage-1
-    parser so both modules agree on the same file regardless of import order."""
+    """Resolve the `.env` path. Precedence: ENV_FILE (set by docker-compose,
+    since the Docker CMD invokes uvicorn directly and can't pass --env-file)
+    > --env-file CLI flag (mirrors main.py's stage-1 parser, for local dev)
+    > nearest .env found from cwd."""
+    env_file_var = os.environ.get("ENV_FILE")
+    if env_file_var:
+        return Path(env_file_var)
     parser = argparse.ArgumentParser(add_help=False)
     parser.add_argument("--env-file", type=str, default=None)
     args, _ = parser.parse_known_args()
@@ -74,14 +80,16 @@ class ConfigManager:
             overrides: dict[str, Any] = json.loads(
                 _LEGACY_OVERRIDE_FILE.read_text(encoding="utf-8")
             )
+            for key, value in overrides.items():
+                if value is not None:
+                    set_key(str(self._env_path), key, str(value), quote_mode="never")
+            migrated_path = _LEGACY_OVERRIDE_FILE.with_name("config.json.migrated")
+            _LEGACY_OVERRIDE_FILE.rename(migrated_path)
         except (OSError, ValueError) as e:
-            logger.warning("Cannot read legacy config override: %s", e)
+            # Never let a migration hiccup (unwritable .env, malformed JSON, ecc.)
+            # crash app boot — retried on the next start, legacy file untouched.
+            logger.warning("Migrazione data/config.json fallita, riprovo al prossimo avvio: %s", e)
             return
-        for key, value in overrides.items():
-            if value is not None:
-                set_key(str(self._env_path), key, str(value), quote_mode="never")
-        migrated_path = _LEGACY_OVERRIDE_FILE.with_name("config.json.migrated")
-        _LEGACY_OVERRIDE_FILE.rename(migrated_path)
         logger.warning(
             "Migrato override legacy %s in %s (rinominato in %s).",
             _LEGACY_OVERRIDE_FILE,

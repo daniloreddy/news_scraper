@@ -9,9 +9,16 @@ services:
       - PYTHONUNBUFFERED=1
       - PORT=${PORT:-8088}
       - TZ=${TZ:-UTC}
+      # ConfigManager legge/scrive .env qui (vedi volumes). Necessario perché il
+      # bind-mount è sulla cartella, non sul singolo file .env: un mount di
+      # singolo file impedisce la sostituzione atomica (temp+rename) che
+      # ConfigManager usa per scrivere — vedi CLAUDE.md "Config hot reload".
+      - ENV_FILE=/app/hostcfg/.env
     # Playwright ha bisogno di /dev/shm abbastanza grande
     shm_size: "512m"
     volumes:
-      - ./.env:/app/.env
+      # Cartella del progetto (contiene .env accanto a questo compose) — non il
+      # singolo file .env, per permettere la scrittura atomica di ConfigManager.
+      - .:/app/hostcfg
       - ./data:/app/data
       - ./debug:/app/debug
