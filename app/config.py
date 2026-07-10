@@ -4,12 +4,15 @@ import argparse
 import json
 import logging
 import os
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
 from dotenv import dotenv_values, find_dotenv, set_key
 
 logger = logging.getLogger(__name__)
+
+_write_lock = threading.Lock()
 
 # UI-editable vs manual-only rule (enforced by convention in app/ui/pages.py,
 # not validated here): a key belongs in the /config editor iff BOTH hold —
@@ -171,16 +174,17 @@ class ConfigManager:
 
     def update_many(self, updates: dict[str, str]) -> None:
         """Persist updates directly to `.env`. Blank or mask value = keep existing secret."""
-        for key, value in updates.items():
-            stripped = value.strip()
-            if not stripped or stripped == _MASK:
-                continue
-            set_key(str(self._env_path), key, stripped, quote_mode="never")
-            self._cache[key] = stripped
-        try:
-            self._last_mtime = self._env_path.stat().st_mtime
-        except OSError:
-            pass
+        with _write_lock:
+            for key, value in updates.items():
+                stripped = value.strip()
+                if not stripped or stripped == _MASK:
+                    continue
+                set_key(str(self._env_path), key, stripped, quote_mode="never")
+                self._cache[key] = stripped
+            try:
+                self._last_mtime = self._env_path.stat().st_mtime
+            except OSError:
+                pass
 
 
 config = ConfigManager()

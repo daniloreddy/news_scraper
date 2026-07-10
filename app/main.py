@@ -115,19 +115,31 @@ def _validate_url(v: str) -> str:
 async def _purge_ui_auth_blocks_periodically() -> None:
     while True:
         await asyncio.sleep(600)
-        ui_auth.purge_expired_blocks()
+        try:
+            ui_auth.purge_expired_blocks()
+        except Exception:
+            # Broad except is deliberate: an unhandled exception here would silently
+            # kill this loop forever (asyncio doesn't restart tasks), leaving expired
+            # rate-limit entries unpurged until the next process restart.
+            logger.exception("Purge periodica dei blocchi rate-limit fallita")
 
 
 async def _purge_old_metrics_periodically() -> None:
     while True:
         await asyncio.sleep(6 * 3600)
-        await metrics.purge_old(config.get_int("METRICS_RETENTION_DAYS", 30))
+        try:
+            await metrics.purge_old(config.get_int("METRICS_RETENTION_DAYS", 30))
+        except Exception:
+            logger.exception("Purge periodica delle metriche fallita")
 
 
 async def _reload_config_periodically() -> None:
     while True:
         await asyncio.sleep(5)
-        config.reload_if_stale()
+        try:
+            config.reload_if_stale()
+        except Exception:
+            logger.exception("Reload periodico della configurazione fallito")
 
 
 @asynccontextmanager

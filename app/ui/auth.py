@@ -4,6 +4,7 @@ import hashlib
 import json
 import logging
 import secrets
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -32,34 +33,39 @@ class _RateLimit:
         self._per_ip_win = per_ip_window
         self._global_max = global_max
         self._global_win = global_window
+        self._lock = threading.Lock()
 
     def check(self, ip: str) -> Optional[str]:
-        now = time.time()
-        gc, gt = self._global
-        if now - gt > self._global_win:
-            gc, gt = 0, now
-        gc += 1
-        self._global = (gc, gt)
-        if gc > self._global_max:
-            return "Troppi tentativi — riprova tra un minuto"
+        with self._lock:
+            now = time.time()
+            gc, gt = self._global
+            if now - gt > self._global_win:
+                gc, gt = 0, now
+            gc += 1
+            self._global = (gc, gt)
+            if gc > self._global_max:
+                return "Troppi tentativi — riprova tra un minuto"
 
-        count, since = self._ip.get(ip, (0, now))
-        if now - since > self._per_ip_win:
-            count, since = 0, now
-        count += 1
-        self._ip[ip] = (count, since)
-        if count > self._per_ip_max:
-            return "Troppi tentativi dal tuo IP — riprova tra 5 minuti"
-        return None
+            count, since = self._ip.get(ip, (0, now))
+            if now - since > self._per_ip_win:
+                count, since = 0, now
+            count += 1
+            self._ip[ip] = (count, since)
+            if count > self._per_ip_max:
+                return "Troppi tentativi dal tuo IP — riprova tra 5 minuti"
+            return None
 
     def purge_expired(self) -> None:
         """Drop IP entries whose window has expired, so the dict doesn't grow forever."""
-        now = time.time()
-        expired = [
-            ip for ip, (_, since) in self._ip.items() if now - since > self._per_ip_win
-        ]
-        for ip in expired:
-            del self._ip[ip]
+        with self._lock:
+            now = time.time()
+            expired = [
+                ip
+                for ip, (_, since) in self._ip.items()
+                if now - since > self._per_ip_win
+            ]
+            for ip in expired:
+                del self._ip[ip]
 
 
 class AuthManager:

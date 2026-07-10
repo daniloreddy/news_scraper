@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 from markitdown import MarkItDown
 from playwright.async_api import Page, async_playwright
 from pydantic import BaseModel, Field as PydanticField
-from tenacity import retry, stop_after_attempt, wait_exponential
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from .config import config
 
@@ -134,7 +134,23 @@ class ArticlesList(BaseModel):
     articles: List[ArticleExtraction]
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=20))
+def _is_transient_llm_error(exc: BaseException) -> bool:
+    """Retry only on network-level failures and 5xx responses. A 4xx (bad request,
+    auth failure, invalid model...) will fail identically on every attempt — retrying
+    it just wastes time and, on repeated calls, tokens."""
+    if isinstance(
+        exc, (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError)
+    ):
+        return True
+    return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=20),
+    retry=retry_if_exception(_is_transient_llm_error),
+    reraise=True,
+)
 async def _call_llm_api(messages: list) -> _LLMResult:
     """POST a {LLM_BASE_URL}/chat/completions con retry su errori transitori."""
     payload = {

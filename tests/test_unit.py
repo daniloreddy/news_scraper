@@ -1,12 +1,12 @@
 """Level 1 — pure unit tests: no HTTP, no mocked I/O."""
 
 import asyncio
+import httpx
 import pytest
 from pydantic import ValidationError
 from fastapi import HTTPException
 from fastapi.security import HTTPAuthorizationCredentials
 from unittest.mock import AsyncMock, MagicMock, patch
-from tenacity import RetryError
 
 from app.config import config
 from app.scraper import _preprocess_html, ArticlesList
@@ -455,7 +455,7 @@ class TestRetryLogic:
         async def flaky(*args, **kwargs):
             call_count[0] += 1
             if call_count[0] < 3:
-                raise TimeoutError("Transient failure")
+                raise httpx.TimeoutException("Transient failure")
             return self._llm_response('{"articles": []}')
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
@@ -469,24 +469,50 @@ class TestRetryLogic:
         assert result.prompt_tokens == 5
         assert result.completion_tokens == 2
 
-    def test_raises_retry_error_after_max_attempts(self):
+    def test_raises_original_error_after_max_attempts(self):
         from app.scraper import _call_llm_api
 
         async def always_fail(*args, **kwargs):
-            raise ConnectionError("LLM unavailable")
+            raise httpx.ConnectError("LLM unavailable")
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
             with patch(
                 "httpx.AsyncClient.post", new=AsyncMock(side_effect=always_fail)
             ):
-                with pytest.raises(RetryError):
+                with pytest.raises(httpx.ConnectError):
                     asyncio.run(_call_llm_api([{"role": "user", "content": "test"}]))
+
+    def test_does_not_retry_non_transient_error(self):
+        from app.scraper import _call_llm_api
+
+        call_count = [0]
+
+        async def always_400(*args, **kwargs):
+            call_count[0] += 1
+            resp = MagicMock()
+            resp.is_success = False
+            resp.status_code = 400
+            resp.json.return_value = {"error": {"message": "bad request"}}
+            resp.text = '{"error": {"message": "bad request"}}'
+            resp.raise_for_status.side_effect = httpx.HTTPStatusError(
+                "Bad Request", request=MagicMock(), response=resp
+            )
+            return resp
+
+        with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
+            with patch(
+                "httpx.AsyncClient.post", new=AsyncMock(side_effect=always_400)
+            ):
+                with pytest.raises(httpx.HTTPStatusError):
+                    asyncio.run(_call_llm_api([{"role": "user", "content": "test"}]))
+
+        assert call_count[0] == 1
 
     def test_extract_articles_returns_empty_after_retry_exhausted(self):
         from app.scraper import _extract_articles_with_llm
 
         async def always_fail(*args, **kwargs):
-            raise ConnectionError("LLM unavailable")
+            raise httpx.ConnectError("LLM unavailable")
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
             with patch(
