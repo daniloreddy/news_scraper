@@ -13,7 +13,7 @@ def _bootstrap() -> None:
     # If deps are already importable (e.g. inside Docker), skip venv entirely.
     sys.path.insert(0, str(_ROOT))
     try:
-        import app.ui.auth  # noqa: F401
+        import app.ui.router  # noqa: F401
 
         return
     except ImportError:
@@ -36,12 +36,16 @@ import getpass  # noqa: E402
 
 sys.path.insert(0, str(_ROOT))
 
-from app.ui.auth import AuthManager  # noqa: E402
+from redberry_webkit.auth import AuthManager  # noqa: E402
 
 
 def main() -> None:
     print("=== News Scraper — Imposta password dashboard ===")
-    auth = AuthManager(auth_file=Path("data/auth.json"), cookie_name="news_scraper_ui")
+    auth = AuthManager(
+        auth_file=Path("data/auth.json"),
+        cookie_name="news_scraper_ui",
+        token_ttl=7 * 24 * 3600,
+    )
     pw1 = getpass.getpass("Nuova password: ")
     pw2 = getpass.getpass("Conferma password: ")
     if pw1 != pw2:

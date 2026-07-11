@@ -1,0 +1,6 @@
+# Changes here will be overwritten by Copier; used by `copier update`.
+_commit: v0.1.0
+_src_path: git@github.com:daniloreddy/redberry-webapp-template.git
+app_name: News Scraper
+app_slug: news_scraper
+github_owner: daniloreddy

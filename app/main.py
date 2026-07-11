@@ -48,12 +48,17 @@ if sys.platform == "win32":
 # .env=..." startup log never appeared, even though the config was loading fine).
 logging.basicConfig(level=logging.INFO)
 
+from redberry_webkit.auth import client_ip, purge_loop  # noqa: E402
+
 from .config import config  # noqa: E402 — must follow stage-1 load_dotenv() above
 from . import metrics  # noqa: E402
 from .metrics import RequestRecord  # noqa: E402
-from .net import resolve_client_ip  # noqa: E402
 from .scraper import scrape_latest_news, scrape_article, ScrapeResult  # noqa: E402
-from .ui.router import router as ui_router, auth as ui_auth  # noqa: E402
+from .ui.router import (  # noqa: E402
+    router as ui_router,
+    auth as ui_auth,
+    TRUSTED_PROXIES,
+)
 from .logging_filters import CredentialFilter  # noqa: E402
 
 for _handler in logging.getLogger().handlers:
@@ -65,7 +70,12 @@ security = HTTPBearer(auto_error=False)
 # Limits concurrent Playwright browser launches to prevent OOM
 BROWSER_SEMAPHORE = threading.Semaphore(3)
 
-limiter = Limiter(key_func=resolve_client_ip)
+def _rate_limit_key(request: Request) -> str:
+    host = request.client.host if request.client else "unknown"
+    return client_ip(request.headers, host, TRUSTED_PROXIES)
+
+
+limiter = Limiter(key_func=_rate_limit_key)
 
 
 def verify_token(
@@ -112,18 +122,6 @@ def _validate_url(v: str) -> str:
     return v
 
 
-async def _purge_ui_auth_blocks_periodically() -> None:
-    while True:
-        await asyncio.sleep(600)
-        try:
-            ui_auth.purge_expired_blocks()
-        except Exception:
-            # Broad except is deliberate: an unhandled exception here would silently
-            # kill this loop forever (asyncio doesn't restart tasks), leaving expired
-            # rate-limit entries unpurged until the next process restart.
-            logger.exception("Purge periodica dei blocchi rate-limit fallita")
-
-
 async def _purge_old_metrics_periodically() -> None:
     while True:
         await asyncio.sleep(6 * 3600)
@@ -145,7 +143,7 @@ async def _reload_config_periodically() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await metrics.init_db()
-    purge_task = asyncio.create_task(_purge_ui_auth_blocks_periodically())
+    purge_task = asyncio.create_task(purge_loop(ui_auth))
     metrics_purge_task = asyncio.create_task(_purge_old_metrics_periodically())
     config_reload_task = asyncio.create_task(_reload_config_periodically())
 
@@ -356,7 +354,7 @@ def scrape_single(
 from .ui import pages as _ui_pages  # noqa: F401, E402 — registers @ui.page decorators; must follow app init
 
 _fastapi_app = app  # keep explicit reference before ui.run_with shadows nothing
-ui.run_with(_fastapi_app, mount_path="/ui", storage_secret=ui_auth._secret + "_ng")
+ui.run_with(_fastapi_app, mount_path="/ui", storage_secret=ui_auth.ui_storage_secret)
 
 
 if __name__ == "__main__":

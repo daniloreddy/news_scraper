@@ -273,7 +273,7 @@ class TestRateLimiting:
     _HEALTH_IP = "203.0.113.2"
 
     def test_scrape_returns_429_after_limit_exceeded(self, client):
-        headers = {"X-Real-IP": self._SCRAPE_IP}
+        headers = {"X-Forwarded-For": self._SCRAPE_IP}
         with patch(
             "app.main.scrape_latest_news",
             new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
@@ -288,7 +288,7 @@ class TestRateLimiting:
         assert response.status_code == 429
 
     def test_health_returns_429_after_limit_exceeded(self, client):
-        headers = {"X-Real-IP": self._HEALTH_IP}
+        headers = {"X-Forwarded-For": self._HEALTH_IP}
         for _ in range(100):
             client.get("/health", headers=headers)
         response = client.get("/health", headers=headers)

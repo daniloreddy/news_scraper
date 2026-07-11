@@ -1,11 +1,18 @@
-# Usa l'immagine ufficiale Playwright che include già i browser
-FROM mcr.microsoft.com/playwright/python:v1.44.0-jammy
+# python:3.12-slim (non l'immagine Playwright-bundled: quella è tagged a una
+# versione fissa di Playwright con Python 3.10, incompatibile con il
+# Requires-Python >=3.11 di redberry-webkit). I browser vengono installati
+# esplicitamente sotto con `playwright install chromium --with-deps`, che
+# porta anche le librerie di sistema necessarie — pattern ufficiale Playwright
+# su immagini Debian-based generiche.
+FROM python:3.12-slim
 
 WORKDIR /app
 
-# Dipendenze Python
+# Dipendenze Python (redberry-webkit installato da git+https, serve git)
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && pip install --no-cache-dir -r requirements.txt \
+    && apt-get purge -y git && apt-get autoremove -y && rm -rf /var/lib/apt/lists/*
 
 # Codice applicazione
 COPY app/ ./app/
