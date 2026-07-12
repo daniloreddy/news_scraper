@@ -181,7 +181,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # ty
 
 # --- Auth middleware for /ui/* ---
 
-_UI_SOCKET_PREFIX = "/ui/socket.io"
+_UI_SOCKET_PREFIX = "/ui/_nicegui"
 
 
 @app.middleware("http")
@@ -191,7 +191,7 @@ async def ui_auth_gate(
     path = request.url.path
     if not path.startswith("/ui"):
         return await call_next(request)
-    # Allow NiceGUI WebSocket/socket.io — auth is enforced at page level
+    # Allow NiceGUI internal assets/websocket — auth is enforced at page level
     if path.startswith(_UI_SOCKET_PREFIX):
         return await call_next(request)
     token = request.cookies.get(ui_auth.cookie_name, "")
