@@ -12,6 +12,9 @@ venv/
 ENV/
 .env
 
+# Local analysis reports (not project deliverables)
+REPORT.md
+
 # OS / IDE
 .vscode/
 .idea/
