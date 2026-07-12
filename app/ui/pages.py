@@ -56,7 +56,7 @@ def _logout_action() -> None:
     ui.button(
         icon="logout",
         on_click=lambda: ui.run_javascript("window.location.href='/auth/logout'"),
-    ).props("flat color=white round").tooltip("Logout")
+    ).props("flat color=white round").tooltip("Esci")
 
 
 def _header(
@@ -87,7 +87,7 @@ def _header(
 
             ui.button(icon="contrast", on_click=_toggle_dark).props(
                 "flat round dense color=white"
-            ).tooltip("Dark / Light")
+            ).tooltip("Tema chiaro/scuro")
 
         ui.label(_APP_NAME).classes("text-body2").style("opacity:0.6")
 
