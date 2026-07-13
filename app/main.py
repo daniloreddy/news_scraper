@@ -14,20 +14,22 @@ import subprocess
 import sys
 import threading
 import time
+from collections.abc import AsyncIterator, Callable, Coroutine
 from contextlib import asynccontextmanager
-from typing import Any, Callable, Coroutine, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import uvicorn
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi.responses import RedirectResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from nicegui import ui
 from pydantic import BaseModel, Field, field_validator
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from starlette.middleware.base import RequestResponseEndpoint
 
 # Stage 1 — lightweight parse at import time, before any other env var is read.
 # Required because uvicorn re-imports app.main on every reload-worker import,
@@ -50,25 +52,26 @@ logging.basicConfig(level=logging.INFO)
 
 from redberry_webkit.auth import client_ip, purge_loop  # noqa: E402
 
-from .config import config  # noqa: E402 — must follow stage-1 load_dotenv() above
 from . import metrics  # noqa: E402
-from .metrics import RequestRecord  # noqa: E402
-from .scraper import scrape_latest_news, scrape_article, ScrapeResult  # noqa: E402
-from .ui.router import (  # noqa: E402
-    router as ui_router,
-    auth as ui_auth,
-    TRUSTED_PROXIES,
-)
+from .config import config  # noqa: E402 — must follow stage-1 load_dotenv() above
 from .logging_filters import CredentialFilter  # noqa: E402
+from .metrics import RequestRecord  # noqa: E402
+from .scraper import ScrapeResult, scrape_article, scrape_latest_news  # noqa: E402
+from .ui.router import TRUSTED_PROXIES  # noqa: E402
+from .ui.router import auth as ui_auth  # noqa: E402
+from .ui.router import router as ui_router  # noqa: E402
 
 for _handler in logging.getLogger().handlers:
     _handler.addFilter(CredentialFilter())
 logger = logging.getLogger(__name__)
 
+DEV = os.getenv("DEV", "false").lower() in ("true", "1", "yes")
+
 security = HTTPBearer(auto_error=False)
 
 # Limits concurrent Playwright browser launches to prevent OOM
 BROWSER_SEMAPHORE = threading.Semaphore(3)
+
 
 def _rate_limit_key(request: Request) -> str:
     host = request.client.host if request.client else "unknown"
@@ -79,16 +82,14 @@ limiter = Limiter(key_func=_rate_limit_key)
 
 
 def verify_token(
-    credentials: Optional[HTTPAuthorizationCredentials] = Depends(security),
-) -> Optional[str]:
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+) -> str | None:
     """Verifica la validità del Bearer Token se impostato in configurazione.
     Read fresh from ConfigManager on every call so UI changes take effect
     immediately, without requiring a process restart."""
     token = config.get("API_AUTH_TOKEN") or None
     if token:
-        if credentials is None or not secrets.compare_digest(
-            credentials.credentials, token
-        ):
+        if credentials is None or not secrets.compare_digest(credentials.credentials, token):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid or missing API Auth Token",
@@ -112,12 +113,7 @@ def _validate_url(v: str) -> str:
     except ValueError:
         pass
     else:
-        if (
-            addr.is_private
-            or addr.is_loopback
-            or addr.is_link_local
-            or addr.is_reserved
-        ):
+        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
             raise ValueError("URL hostname not allowed")
     return v
 
@@ -141,7 +137,7 @@ async def _reload_config_periodically() -> None:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await metrics.init_db()
     purge_task = asyncio.create_task(purge_loop(ui_auth))
     metrics_purge_task = asyncio.create_task(_purge_old_metrics_periodically())
@@ -157,9 +153,7 @@ async def lifespan(app: FastAPI):
         )
         logger.info("Playwright Chromium pronto.")
     except (subprocess.CalledProcessError, OSError) as e:
-        logger.warning(
-            "Installazione automatica Playwright fallita (continua comunque): %s", e
-        )
+        logger.warning("Installazione automatica Playwright fallita (continua comunque): %s", e)
     yield
     purge_task.cancel()
     metrics_purge_task.cancel()
@@ -171,35 +165,30 @@ app = FastAPI(
     description="Scraping news per n8n · Dashboard su /ui/",
     version="1.0.0",
     lifespan=lifespan,
-    docs_url=None,
-    redoc_url=None,
-    openapi_url=None,
+    docs_url="/docs" if DEV else None,
+    redoc_url="/redoc" if DEV else None,
+    openapi_url="/openapi.json" if DEV else None,
 )
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 
-# --- Auth middleware for /ui/* ---
-
-_UI_SOCKET_PREFIX = "/ui/_nicegui"
+_UI_PREFIX = "/ui"
+_LOGIN_PATHS = {"/login", "/auth/login", "/auth/logout"}
+_UI_BYPASS_PREFIXES = (f"{_UI_PREFIX}/_nicegui",)
 
 
 @app.middleware("http")
-async def ui_auth_gate(
-    request: Request, call_next: Callable[[Request], Coroutine[Any, Any, Any]]
-) -> Any:
+async def _auth_gate(request: Request, call_next: RequestResponseEndpoint) -> Response:
     path = request.url.path
-    if not path.startswith("/ui"):
+    if path in _LOGIN_PATHS or any(path.startswith(p) for p in _UI_BYPASS_PREFIXES):
         return await call_next(request)
-    # Allow NiceGUI internal assets/websocket — auth is enforced at page level
-    if path.startswith(_UI_SOCKET_PREFIX):
-        return await call_next(request)
-    token = request.cookies.get(ui_auth.cookie_name, "")
-    if ui_auth.verify_token(token):
-        return await call_next(request)
-    if "websocket" in request.headers.get("upgrade", "").lower():
-        return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
-    return RedirectResponse(url="/login", status_code=302)
+    if path == _UI_PREFIX or path.startswith(_UI_PREFIX + "/"):
+        token = request.cookies.get(ui_auth.cookie_name, "")
+        if ui_auth.verify_token(token):
+            return await call_next(request)
+        return RedirectResponse(url="/login", status_code=302)
+    return await call_next(request)
 
 
 # --- Static files ---
@@ -225,9 +214,9 @@ class ScrapeRequest(BaseModel):
 class ArticleResult(BaseModel):
     title: str
     url: str
-    published_date: Optional[str]
+    published_date: str | None
     content: str
-    thumbnail_url: Optional[str]
+    thumbnail_url: str | None
 
 
 class ArticleRequest(BaseModel):
@@ -244,7 +233,7 @@ class ArticleRequest(BaseModel):
 
 @app.get("/health")
 @limiter.limit("100/minute")
-async def health(request: Request):
+async def health(request: Request) -> dict[str, str]:
     return {"status": "ok"}
 
 
@@ -253,7 +242,7 @@ def _run_scrape_sync(
     url: str,
     coro: Coroutine[Any, Any, ScrapeResult],
     extract: Callable[[ScrapeResult], Any],
-    empty_error: Optional[str] = None,
+    empty_error: str | None = None,
 ) -> Any:
     """Bridges a sync FastAPI endpoint with the async scraper coroutine: runs it
     in its own event loop bounded by BROWSER_SEMAPHORE, records metrics, and maps
@@ -266,20 +255,18 @@ def _run_scrape_sync(
 
         async def _run() -> Any:
             start = time.time()
-            result: Optional[ScrapeResult] = None
+            result: ScrapeResult | None = None
             status_str = "ok"
-            error_msg: Optional[str] = None
-            http_exc: Optional[HTTPException] = None
+            error_msg: str | None = None
+            http_exc: HTTPException | None = None
 
             try:
-                result = await asyncio.wait_for(
-                    coro, timeout=config.get_float("SCRAPE_TIMEOUT", 300)
-                )
+                result = await asyncio.wait_for(coro, timeout=config.get_float("SCRAPE_TIMEOUT", 300))
                 if empty_error and not result.articles:
                     status_str = "error"
                     error_msg = empty_error
                     http_exc = HTTPException(status_code=404, detail=empty_error)
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 status_str = "timeout"
             except Exception as e:
                 status_str = "error"
@@ -317,8 +304,8 @@ def _run_scrape_sync(
 def scrape(
     request: Request,
     req: ScrapeRequest,
-    token: Optional[str] = Depends(verify_token),
-):
+    token: str | None = Depends(verify_token),
+) -> Any:
     """
     Scrapa la pagina principale e restituisce le ultime N notizie.
     """
@@ -337,8 +324,8 @@ def scrape(
 def scrape_single(
     request: Request,
     req: ArticleRequest,
-    token: Optional[str] = Depends(verify_token),
-):
+    token: str | None = Depends(verify_token),
+) -> Any:
     """
     Scrapa un singolo articolo dato il suo URL.
     """
@@ -360,14 +347,11 @@ ui.run_with(_fastapi_app, mount_path="/ui", storage_secret=ui_auth.ui_storage_se
 if __name__ == "__main__":
     default_port = int(os.getenv("PORT", "8088"))
     default_host = os.getenv("HOST", "127.0.0.1")
-    default_dev = os.getenv("DEV", "false").lower() in ("true", "1", "yes")
 
-    parser = argparse.ArgumentParser(
-        description="news-scraper — FastAPI microservice per scraping news"
-    )
+    parser = argparse.ArgumentParser(description="news-scraper — FastAPI microservice per scraping news")
     parser.add_argument("--port", type=int, default=default_port)
     parser.add_argument("--host", type=str, default=default_host)
-    parser.add_argument("--dev", action="store_true", default=default_dev)
+    parser.add_argument("--dev", action=argparse.BooleanOptionalAction, default=DEV)
     parser.add_argument("--env-file", type=str, default=None)
     args = parser.parse_args()
 

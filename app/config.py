@@ -55,9 +55,7 @@ def _migrate_legacy_override_file(env_path: Path) -> None:
     if not _LEGACY_OVERRIDE_FILE.exists():
         return
     try:
-        overrides: dict[str, Any] = json.loads(
-            _LEGACY_OVERRIDE_FILE.read_text(encoding="utf-8")
-        )
+        overrides: dict[str, Any] = json.loads(_LEGACY_OVERRIDE_FILE.read_text(encoding="utf-8"))
         for key, value in overrides.items():
             if value is not None:
                 set_key(str(env_path), key, str(value), quote_mode="never")
@@ -66,9 +64,7 @@ def _migrate_legacy_override_file(env_path: Path) -> None:
     except (OSError, ValueError) as e:
         # Never let a migration hiccup (unwritable .env, malformed JSON, ecc.)
         # crash app boot — retried on the next start, legacy file untouched.
-        logger.warning(
-            "Migrazione data/config.json fallita, riprovo al prossimo avvio: %s", e
-        )
+        logger.warning("Migrazione data/config.json fallita, riprovo al prossimo avvio: %s", e)
         return
     logger.warning(
         "Migrato override legacy %s in %s (rinominato in %s).",

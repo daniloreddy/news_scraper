@@ -1,11 +1,9 @@
 """Level 2 — endpoint tests via FastAPI TestClient with mocked scraper functions."""
 
-import asyncio
-from unittest.mock import patch, AsyncMock
+from unittest.mock import AsyncMock, patch
 
 from app.config import config
 from app.scraper import ScrapeResult
-
 
 SAMPLE_ARTICLE = {
     "title": "Test Article",
@@ -39,9 +37,7 @@ class TestScrapeEndpoint:
             "app.main.scrape_latest_news",
             new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ):
-            response = client.post(
-                "/scrape", json={"url": "https://example.com", "max_articles": 1}
-            )
+            response = client.post("/scrape", json={"url": "https://example.com", "max_articles": 1})
         assert response.status_code == 200
         data = response.json()
         assert len(data) == 1
@@ -55,9 +51,7 @@ class TestScrapeEndpoint:
         ) as mock:
             response = client.post("/scrape", json={})
         assert response.status_code == 200
-        mock.assert_called_once_with(
-            "https://diabloimmortal.blizzard.com/en-us#news", 1
-        )
+        mock.assert_called_once_with("https://diabloimmortal.blizzard.com/en-us#news", 1)
 
     def test_no_articles_found_returns_404(self, client):
         with patch(
@@ -78,7 +72,7 @@ class TestScrapeEndpoint:
     def test_timeout_returns_504(self, client):
         with patch(
             "app.main.scrape_latest_news",
-            new=AsyncMock(side_effect=asyncio.TimeoutError()),
+            new=AsyncMock(side_effect=TimeoutError()),
         ):
             response = client.post("/scrape", json={"url": "https://example.com"})
         assert response.status_code == 504
@@ -97,9 +91,7 @@ class TestScrapeEndpoint:
             "app.main.scrape_latest_news",
             new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE, second])),
         ):
-            response = client.post(
-                "/scrape", json={"url": "https://example.com", "max_articles": 2}
-            )
+            response = client.post("/scrape", json={"url": "https://example.com", "max_articles": 2})
         assert response.status_code == 200
         assert len(response.json()) == 2
 
@@ -115,28 +107,18 @@ class TestScrapeArticleEndpoint:
             "app.main.scrape_article",
             new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ):
-            response = client.post(
-                "/scrape/article", json={"url": "https://example.com/article/1"}
-            )
+            response = client.post("/scrape/article", json={"url": "https://example.com/article/1"})
         assert response.status_code == 200
         assert response.json()["title"] == "Test Article"
 
     def test_scraper_exception_returns_500(self, client):
-        with patch(
-            "app.main.scrape_article", new=AsyncMock(side_effect=RuntimeError("fail"))
-        ):
-            response = client.post(
-                "/scrape/article", json={"url": "https://example.com/article/1"}
-            )
+        with patch("app.main.scrape_article", new=AsyncMock(side_effect=RuntimeError("fail"))):
+            response = client.post("/scrape/article", json={"url": "https://example.com/article/1"})
         assert response.status_code == 500
 
     def test_timeout_returns_504(self, client):
-        with patch(
-            "app.main.scrape_article", new=AsyncMock(side_effect=asyncio.TimeoutError())
-        ):
-            response = client.post(
-                "/scrape/article", json={"url": "https://example.com/article/1"}
-            )
+        with patch("app.main.scrape_article", new=AsyncMock(side_effect=TimeoutError())):
+            response = client.post("/scrape/article", json={"url": "https://example.com/article/1"})
         assert response.status_code == 504
 
     def test_missing_url_in_body_returns_422(self, client):
@@ -153,9 +135,7 @@ class TestScrapeArticleEndpoint:
             "app.main.scrape_article",
             new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ):
-            response = client.post(
-                "/scrape/article", json={"url": "https://example.com"}
-            )
+            response = client.post("/scrape/article", json={"url": "https://example.com"})
         data = response.json()
         assert set(data.keys()) == {
             "title",
@@ -193,15 +173,11 @@ class TestInputValidation:
         assert response.status_code == 422
 
     def test_max_articles_above_limit_returns_422(self, client):
-        response = client.post(
-            "/scrape", json={"url": "https://example.com", "max_articles": 11}
-        )
+        response = client.post("/scrape", json={"url": "https://example.com", "max_articles": 11})
         assert response.status_code == 422
 
     def test_max_articles_zero_returns_422(self, client):
-        response = client.post(
-            "/scrape", json={"url": "https://example.com", "max_articles": 0}
-        )
+        response = client.post("/scrape", json={"url": "https://example.com", "max_articles": 0})
         assert response.status_code == 422
 
 
@@ -249,9 +225,7 @@ class TestAuthentication:
 
     def test_auth_enforced_on_article_endpoint_too(self, client):
         with patch.dict(config._cache, {"API_AUTH_TOKEN": "mysecret"}):
-            response = client.post(
-                "/scrape/article", json={"url": "https://example.com"}
-            )
+            response = client.post("/scrape/article", json={"url": "https://example.com"})
         assert response.status_code == 401
 
     def test_auth_not_enforced_on_health(self, client):
@@ -279,12 +253,8 @@ class TestRateLimiting:
             new=AsyncMock(return_value=ScrapeResult(articles=[SAMPLE_ARTICLE])),
         ):
             for _ in range(20):
-                client.post(
-                    "/scrape", json={"url": "https://example.com"}, headers=headers
-                )
-            response = client.post(
-                "/scrape", json={"url": "https://example.com"}, headers=headers
-            )
+                client.post("/scrape", json={"url": "https://example.com"}, headers=headers)
+            response = client.post("/scrape", json={"url": "https://example.com"}, headers=headers)
         assert response.status_code == 429
 
     def test_health_returns_429_after_limit_exceeded(self, client):
@@ -304,26 +274,16 @@ class TestPublishedDate:
     def test_scrape_article_published_date_can_be_none(self, client):
         with patch(
             "app.main.scrape_article",
-            new=AsyncMock(
-                return_value=ScrapeResult(
-                    articles=[{**SAMPLE_ARTICLE, "published_date": None}]
-                )
-            ),
+            new=AsyncMock(return_value=ScrapeResult(articles=[{**SAMPLE_ARTICLE, "published_date": None}])),
         ):
-            response = client.post(
-                "/scrape/article", json={"url": "https://example.com"}
-            )
+            response = client.post("/scrape/article", json={"url": "https://example.com"})
         assert response.status_code == 200
         assert response.json()["published_date"] is None
 
     def test_scrape_published_date_propagated_when_present(self, client):
         with patch(
             "app.main.scrape_latest_news",
-            new=AsyncMock(
-                return_value=ScrapeResult(
-                    articles=[{**SAMPLE_ARTICLE, "published_date": "2026-06-12"}]
-                )
-            ),
+            new=AsyncMock(return_value=ScrapeResult(articles=[{**SAMPLE_ARTICLE, "published_date": "2026-06-12"}])),
         ):
             response = client.post("/scrape", json={"url": "https://example.com"})
         assert response.status_code == 200

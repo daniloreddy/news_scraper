@@ -9,16 +9,18 @@ import json
 import logging
 import os
 import re
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import AsyncIterator, List, Optional
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 from bs4 import BeautifulSoup
 from markitdown import MarkItDown
 from playwright.async_api import Page, async_playwright
-from pydantic import BaseModel, Field as PydanticField
+from pydantic import BaseModel
+from pydantic import Field as PydanticField
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from .config import config
@@ -27,10 +29,7 @@ logger = logging.getLogger(__name__)
 
 md_converter = MarkItDown()
 
-_USER_AGENT = (
-    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-)
+_USER_AGENT = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 " "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
 
 def _html_to_markdown(html: str) -> str:
@@ -55,26 +54,22 @@ async def _new_browser_page() -> AsyncIterator[Page]:
 
 @dataclass
 class ScrapeResult:
-    articles: list[dict]
+    articles: list[dict[str, Any]]
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
 
 @dataclass
 class _LLMResult:
-    content: Optional[str]
+    content: str | None
     prompt_tokens: int = 0
     completion_tokens: int = 0
 
 
 def _sanitize_markdown(text: str) -> str:
     """Rimuove artefatti HTML residui dal Markdown per ridurre la superficie di prompt injection."""
-    text = re.sub(
-        r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE
-    )
-    text = re.sub(
-        r"<iframe[^>]*>.*?</iframe>", "", text, flags=re.DOTALL | re.IGNORECASE
-    )
+    text = re.sub(r"<script[^>]*>.*?</script>", "", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<iframe[^>]*>.*?</iframe>", "", text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r"data:[^;]+;base64,[A-Za-z0-9+/=]+", "[DATA_URI_REMOVED]", text)
     text = re.sub(r"javascript:", "", text, flags=re.IGNORECASE)
     return text
@@ -119,28 +114,20 @@ def _preprocess_html(html_content: str, base_url: str) -> str:
 
 class ArticleExtraction(BaseModel):
     title: str = PydanticField(description="Titolo della notizia o dell'articolo.")
-    url: str = PydanticField(
-        description="URL assoluto completo che porta all'articolo."
-    )
-    published_date: Optional[str] = PydanticField(
-        description="Data di pubblicazione estratta, se presente.", default=None
-    )
-    thumbnail_url: Optional[str] = PydanticField(
-        description="URL dell'immagine di copertina, se presente.", default=None
-    )
+    url: str = PydanticField(description="URL assoluto completo che porta all'articolo.")
+    published_date: str | None = PydanticField(description="Data di pubblicazione estratta, se presente.", default=None)
+    thumbnail_url: str | None = PydanticField(description="URL dell'immagine di copertina, se presente.", default=None)
 
 
 class ArticlesList(BaseModel):
-    articles: List[ArticleExtraction]
+    articles: list[ArticleExtraction]
 
 
 def _is_transient_llm_error(exc: BaseException) -> bool:
     """Retry only on network-level failures and 5xx responses. A 4xx (bad request,
     auth failure, invalid model...) will fail identically on every attempt — retrying
     it just wastes time and, on repeated calls, tokens."""
-    if isinstance(
-        exc, (httpx.TimeoutException, httpx.ConnectError, httpx.RemoteProtocolError)
-    ):
+    if isinstance(exc, httpx.TimeoutException | httpx.ConnectError | httpx.RemoteProtocolError):
         return True
     return isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code >= 500
 
@@ -151,7 +138,7 @@ def _is_transient_llm_error(exc: BaseException) -> bool:
     retry=retry_if_exception(_is_transient_llm_error),
     reraise=True,
 )
-async def _call_llm_api(messages: list) -> _LLMResult:
+async def _call_llm_api(messages: list[dict[str, Any]]) -> _LLMResult:
     """POST a {LLM_BASE_URL}/chat/completions con retry su errori transitori."""
     payload = {
         "model": config.get("LLM_MODEL"),
@@ -182,9 +169,7 @@ async def _call_llm_api(messages: list) -> _LLMResult:
             err_msg = err_body.get("error", {}).get("message") or resp.text
         except (ValueError, AttributeError):
             err_msg = resp.text[:300]
-        logger.error(
-            "LLM %s %s: %s", resp.status_code, config.get("LLM_BASE_URL"), err_msg
-        )
+        logger.error("LLM %s %s: %s", resp.status_code, config.get("LLM_BASE_URL"), err_msg)
         resp.raise_for_status()
 
     data = resp.json()
@@ -199,7 +184,7 @@ async def _call_llm_api(messages: list) -> _LLMResult:
 
 async def _extract_articles_with_llm(
     markdown_text: str, base_url: str, max_articles: int
-) -> tuple[List[dict], int, int]:
+) -> tuple[list[dict[str, Any]], int, int]:
     """Estrae articoli dal Markdown via LLM. Restituisce (articoli, prompt_tokens, completion_tokens)."""
     prompt = f"""
     Analizza il seguente contenuto Markdown estratto da una pagina web ({base_url}).
@@ -208,7 +193,9 @@ async def _extract_articles_with_llm(
 
     Per ogni articolo devi restituire:
     - title: Il titolo della notizia.
-    - url: L'URL completo dell'articolo. Assicurati che sia assoluto (es. se trovi '/en-us/article/123', e la base è '{base_url}', l'URL completo potrebbe essere 'https://news.blizzard.com/en-us/article/123').
+    - url: L'URL completo dell'articolo. Assicurati che sia assoluto (es. se trovi
+      '/en-us/article/123', e la base è '{base_url}', l'URL completo potrebbe essere
+      'https://news.blizzard.com/en-us/article/123').
     - published_date: La data di pubblicazione, se presente nel testo vicino al link.
     - thumbnail_url: L'URL di una eventuale immagine associata, se presente nel markdown.
 
@@ -221,12 +208,13 @@ async def _extract_articles_with_llm(
     messages = [
         {
             "role": "system",
-            "content": "Sei un assistente specializzato nell'estrazione di dati strutturati da pagine web Markdown. Rispondi SEMPRE e SOLO con un oggetto JSON valido.",
+            "content": "Sei un assistente specializzato nell'estrazione di dati strutturati da pagine web Markdown. "  # noqa: E501
+            "Rispondi SEMPRE e SOLO con un oggetto JSON valido.",
         },
         {
             "role": "user",
-            "content": prompt
-            + '\n\nRispondi con un JSON che abbia questa struttura: {"articles": [{"title": "...", "url": "...", "published_date": "...", "thumbnail_url": "..."}]}',
+            "content": prompt + "\n\nRispondi con un JSON che abbia questa struttura: "
+            '{"articles": [{"title": "...", "url": "...", "published_date": "...", "thumbnail_url": "..."}]}',
         },
     ]
 
@@ -281,9 +269,7 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> ScrapeResult:
             articles_meta,
             prompt_tokens,
             completion_tokens,
-        ) = await _extract_articles_with_llm(
-            _sanitize_markdown(markdown_text), url, max_articles
-        )
+        ) = await _extract_articles_with_llm(_sanitize_markdown(markdown_text), url, max_articles)
         logger.info("L'LLM ha estratto %d link ad articoli.", len(articles_meta))
 
         results = []
@@ -292,9 +278,7 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> ScrapeResult:
                 article_data = await _scrape_article_page(page, meta["url"])
 
                 article_data["title"] = meta.get("title") or article_data["title"]
-                if not article_data.get("published_date") and meta.get(
-                    "published_date"
-                ):
+                if not article_data.get("published_date") and meta.get("published_date"):
                     article_data["published_date"] = meta["published_date"]
                 if not article_data.get("thumbnail_url") and meta.get("thumbnail_url"):
                     article_data["thumbnail_url"] = meta["thumbnail_url"]
@@ -321,7 +305,7 @@ async def scrape_article(url: str) -> ScrapeResult:
         return ScrapeResult(articles=[article])
 
 
-async def _scrape_article_page(page: Page, url: str) -> dict:
+async def _scrape_article_page(page: Page, url: str) -> dict[str, Any]:
     """Apre un articolo ed estrae il contenuto pulito via MarkItDown."""
     logger.info("Scraping articolo: %s", url)
     await page.goto(url, wait_until="domcontentloaded", timeout=30000)

@@ -5,7 +5,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any
 
 import aiosqlite
 
@@ -18,10 +18,10 @@ _lock = asyncio.Lock()
 @dataclass
 class RequestRecord:
     endpoint: str
-    url: Optional[str]
+    url: str | None
     status: str  # "ok" | "error" | "timeout"
     duration: float
-    error_msg: Optional[str] = None
+    error_msg: str | None = None
     prompt_tokens: int = field(default=0)
     completion_tokens: int = field(default=0)
 
@@ -71,7 +71,7 @@ async def record(rec: RequestRecord) -> None:
             logger.warning("MetricsDB record failed: %s", e)
 
 
-async def get_stats(hours: int = 24) -> dict:
+async def get_stats(hours: int = 24) -> dict[str, Any]:
     since = time.time() - hours * 3600
     async with aiosqlite.connect(_DB_PATH) as db:
         async with db.execute(
@@ -113,11 +113,9 @@ async def purge_old(days: int) -> None:
             logger.warning("MetricsDB purge failed: %s", e)
 
 
-async def get_history(limit: int = 100) -> list[dict]:
+async def get_history(limit: int = 100) -> list[dict[str, Any]]:
     async with aiosqlite.connect(_DB_PATH) as db:
         db.row_factory = aiosqlite.Row
-        async with db.execute(
-            "SELECT * FROM requests ORDER BY ts DESC LIMIT ?", (limit,)
-        ) as cur:
+        async with db.execute("SELECT * FROM requests ORDER BY ts DESC LIMIT ?", (limit,)) as cur:
             rows = await cur.fetchall()
     return [dict(r) for r in rows]

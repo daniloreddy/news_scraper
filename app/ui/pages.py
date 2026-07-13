@@ -3,7 +3,7 @@
 import datetime
 import logging
 from collections.abc import Callable
-from typing import Any, Optional
+from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import Request
@@ -72,9 +72,9 @@ def _header(
 
         for label, icon, path in nav_items:
             if label.lower() != current.lower():
-                ui.button(icon=icon, on_click=lambda p=path: ui.navigate.to(p)).props(
-                    "flat color=white round"
-                ).tooltip(label)
+                ui.button(icon=icon, on_click=lambda p=path: ui.navigate.to(p)).props("flat color=white round").tooltip(
+                    label
+                )
 
         if extra_actions is not None:
             extra_actions()
@@ -85,9 +85,9 @@ def _header(
                 dark.toggle()
                 ng_app.storage.user["dark_mode"] = dark.value
 
-            ui.button(icon="contrast", on_click=_toggle_dark).props(
-                "flat round dense color=white"
-            ).tooltip("Tema chiaro/scuro")
+            ui.button(icon="contrast", on_click=_toggle_dark).props("flat round dense color=white").tooltip(
+                "Tema chiaro/scuro"
+            )
 
         ui.label(_APP_NAME).classes("text-body2").style("opacity:0.6")
 
@@ -98,7 +98,7 @@ def _footer() -> None:
 
 
 @ui.page("/")
-async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
+async def dashboard_page(request: Request) -> RedirectResponse | None:
     if not _check_auth(request):
         return RedirectResponse("/login")
 
@@ -118,11 +118,7 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
         ui.separator()
         history_label = ui.label("").classes("text-subtitle2 text-grey-6")
         history_wrap = ui.column().style("width:100%;")
-        refresh_label = (
-            ui.label("")
-            .classes("text-caption text-grey-6")
-            .style("text-align:right; width:100%")
-        )
+        refresh_label = ui.label("").classes("text-caption text-grey-6").style("text-align:right; width:100%")
 
         async def refresh() -> None:
             stats = await mdb.get_stats(hours=24)
@@ -135,13 +131,9 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
                 _metric_card("Errori", str(stats["errors"]), "negative")
                 _metric_card("Durata media", f"{stats['avg_duration_s']}s")
                 _metric_card("Token prompt", str(stats["prompt_tokens"]), "warning")
-                _metric_card(
-                    "Token completion", str(stats["completion_tokens"]), "info"
-                )
+                _metric_card("Token completion", str(stats["completion_tokens"]), "info")
 
-            history_label.set_text(
-                f"Storico richieste ({len(history)} record più recenti)"
-            )
+            history_label.set_text(f"Storico richieste ({len(history)} record più recenti)")
 
             history_wrap.clear()
             with history_wrap:
@@ -188,9 +180,7 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
                             "endpoint": r["endpoint"],
                             "url": short_url,
                             "status": r["status"],
-                            "duration": f"{r['duration']:.1f}"
-                            if r["duration"]
-                            else "—",
+                            "duration": f"{r['duration']:.1f}" if r["duration"] else "—",
                             "tokens": f"{r['prompt_tokens'] or 0}/{r['completion_tokens'] or 0}",
                         }
                     )
@@ -223,7 +213,7 @@ async def dashboard_page(request: Request) -> Optional[RedirectResponse]:
 
 
 @ui.page("/config")
-async def config_page(request: Request) -> Optional[RedirectResponse]:
+async def config_page(request: Request) -> RedirectResponse | None:
     if not _check_auth(request):
         return RedirectResponse("/login")
 
@@ -236,19 +226,15 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
         extra_actions=_logout_action,
     )
 
-    with ui.column().style(
-        "width:100%; max-width:720px; margin:0 auto; padding:1.25rem; gap:0.75rem;"
-    ):
+    with ui.column().style("width:100%; max-width:720px; margin:0 auto; padding:1.25rem; gap:0.75rem;"):
         ui.label("Configurazione").classes("text-h6")
         with ui.row().classes("items-center q-gutter-sm"):
             ui.label("Legenda:").classes("text-caption text-grey-6")
             ui.badge("hot-reload").props("color=positive")
-        ui.label(
-            "Lascia vuoto i campi segreto per mantenere il valore esistente."
-        ).classes("text-caption text-grey-6")
-        ui.label(
-            "Le modifiche vengono scritte direttamente in .env ed effettive entro ~5s, senza restart."
-        ).classes("text-caption text-grey-6")
+        ui.label("Lascia vuoto i campi segreto per mantenere il valore esistente.").classes("text-caption text-grey-6")
+        ui.label("Le modifiche vengono scritte direttamente in .env ed effettive entro ~5s, senza restart.").classes(
+            "text-caption text-grey-6"
+        )
 
         cur = config.get_public()
 
@@ -259,32 +245,20 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                 ui.badge("hot-reload").props("color=positive")
             ui.separator().classes("q-mb-sm")
 
-            inp_base_url = ui.input(
-                "Base URL", value=cur.get("LLM_BASE_URL", "")
-            ).classes("full-width")
+            inp_base_url = ui.input("Base URL", value=cur.get("LLM_BASE_URL", "")).classes("full-width")
             inp_api_key = (
                 ui.input("API Key", value="", placeholder="lascia vuoto per mantenere")
                 .classes("full-width")
                 .props("type=password")
             )
-            inp_model = ui.input("Modello", value=cur.get("LLM_MODEL", "")).classes(
-                "full-width"
-            )
+            inp_model = ui.input("Modello", value=cur.get("LLM_MODEL", "")).classes("full-width")
             with ui.row().classes("full-width q-gutter-sm"):
-                inp_temp = ui.input(
-                    "Temperature", value=cur.get("LLM_TEMPERATURE", "")
-                ).style("flex:1;")
-                inp_llm_timeout = ui.input(
-                    "Timeout LLM (s)", value=cur.get("LLM_TIMEOUT", "")
-                ).style("flex:1;")
+                inp_temp = ui.input("Temperature", value=cur.get("LLM_TEMPERATURE", "")).style("flex:1;")
+                inp_llm_timeout = ui.input("Timeout LLM (s)", value=cur.get("LLM_TIMEOUT", "")).style("flex:1;")
             inp_max_prompt = (
-                ui.input(
-                    "Max prompt chars", value=cur.get("LLM_MAX_PROMPT_CHARS", "8000")
-                )
+                ui.input("Max prompt chars", value=cur.get("LLM_MAX_PROMPT_CHARS", "8000"))
                 .classes("full-width")
-                .props(
-                    'hint="Tronca il markdown inviato all\'LLM. Riduci se il server rifiuta con context exceeded."'
-                )
+                .props('hint="Tronca il markdown inviato all\'LLM. Riduci se il server rifiuta con context exceeded."')
             )
 
         with ui.card().classes("q-pa-md full-width"):
@@ -294,9 +268,9 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                 ui.badge("hot-reload").props("color=positive")
             ui.separator().classes("q-mb-sm")
 
-            inp_scrape_timeout = ui.input(
-                "Timeout Scraping (s)", value=cur.get("SCRAPE_TIMEOUT", "")
-            ).classes("full-width")
+            inp_scrape_timeout = ui.input("Timeout Scraping (s)", value=cur.get("SCRAPE_TIMEOUT", "")).classes(
+                "full-width"
+            )
             debug_switch = ui.switch(
                 "Debug mode (salva HTML/MD/JSON in debug/)",
                 value=cur.get("DEBUG", "false").lower() == "true",
@@ -304,9 +278,7 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
 
         with ui.card().classes("q-pa-md full-width"):
             with ui.row().classes("items-center q-mb-xs"):
-                ui.label("Interfaccia").classes(
-                    "text-caption text-grey-6 text-uppercase"
-                )
+                ui.label("Interfaccia").classes("text-caption text-grey-6 text-uppercase")
                 ui.space()
                 ui.badge("hot-reload").props("color=positive")
             ui.separator().classes("q-mb-sm")
@@ -326,9 +298,7 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
             inp_timezone = (
                 ui.input("Timezone", value=cur.get("TZ", "UTC"))
                 .classes("full-width")
-                .props(
-                    'hint="Nome IANA, es. Europe/Rome. Usato per gli orari mostrati in dashboard."'
-                )
+                .props('hint="Nome IANA, es. Europe/Rome. Usato per gli orari mostrati in dashboard."')
             )
 
         with ui.card().classes("q-pa-md full-width"):
@@ -339,16 +309,10 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
             ui.separator().classes("q-mb-sm")
 
             ui.label("Rate Limit").classes("text-caption text-grey-6 q-mb-xs")
-            inp_rate_limit = ui.input(
-                "Rate Limit", value=cur.get("RATE_LIMIT", "")
-            ).classes("full-width")
-            ui.label("Formato: N/second|minute|hour").classes(
-                "text-caption text-grey-6 q-mb-sm"
-            )
+            inp_rate_limit = ui.input("Rate Limit", value=cur.get("RATE_LIMIT", "")).classes("full-width")
+            ui.label("Formato: N/second|minute|hour").classes("text-caption text-grey-6 q-mb-sm")
             inp_auth_token = (
-                ui.input(
-                    "Auth Token API", value="", placeholder="lascia vuoto per mantenere"
-                )
+                ui.input("Auth Token API", value="", placeholder="lascia vuoto per mantenere")
                 .classes("full-width")
                 .props("type=password")
             )
@@ -392,17 +356,13 @@ async def config_page(request: Request) -> Optional[RedirectResponse]:
                     }
                 )
             except OSError as e:
-                ui.notify(
-                    f"Errore scrittura .env: {e}", type="negative", position="top"
-                )
+                ui.notify(f"Errore scrittura .env: {e}", type="negative", position="top")
                 return
             inp_api_key.set_value("")
             inp_auth_token.set_value("")
             ui.notify("Configurazione salvata", type="positive", position="top")
 
-        ui.button("Salva", icon="save", on_click=save).props("color=primary").classes(
-            "q-mt-sm"
-        )
+        ui.button("Salva", icon="save", on_click=save).props("color=primary").classes("q-mt-sm")
 
     _footer()
     return None

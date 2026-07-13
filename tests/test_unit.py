@@ -1,17 +1,17 @@
 """Level 1 — pure unit tests: no HTTP, no mocked I/O."""
 
 import asyncio
-import httpx
-import pytest
-from pydantic import ValidationError
-from fastapi import HTTPException
-from fastapi.security import HTTPAuthorizationCredentials
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.config import config
-from app.scraper import _preprocess_html, ArticlesList
-from app.main import verify_token, _validate_url, ScrapeRequest, ArticleRequest
+import httpx
+import pytest
+from fastapi import HTTPException
+from fastapi.security import HTTPAuthorizationCredentials
+from pydantic import ValidationError
 
+from app.config import config
+from app.main import ArticleRequest, ScrapeRequest, _validate_url, verify_token
+from app.scraper import ArticlesList, _preprocess_html
 
 # ---------------------------------------------------------------------------
 # _preprocess_html
@@ -397,9 +397,7 @@ class TestScrapeArticlePage:
     def test_title_stripped_at_em_dash(self):
         from app.scraper import md_converter
 
-        page, mock_result = self._make_page(
-            "Content", title="Article Title — Site Name"
-        )
+        page, mock_result = self._make_page("Content", title="Article Title — Site Name")
         with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert result["title"] == "Article Title"
@@ -423,9 +421,7 @@ class TestScrapeArticlePage:
     def test_thumbnail_url_from_page_evaluate(self):
         from app.scraper import md_converter
 
-        page, mock_result = self._make_page(
-            "Content", thumbnail="https://example.com/thumb.jpg"
-        )
+        page, mock_result = self._make_page("Content", thumbnail="https://example.com/thumb.jpg")
         with patch.object(md_converter, "convert_stream", return_value=mock_result):
             result = self._run(page)
         assert result["thumbnail_url"] == "https://example.com/thumb.jpg"
@@ -460,9 +456,7 @@ class TestRetryLogic:
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
             with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=flaky)):
-                result = asyncio.run(
-                    _call_llm_api([{"role": "user", "content": "test"}])
-                )
+                result = asyncio.run(_call_llm_api([{"role": "user", "content": "test"}]))
 
         assert call_count[0] == 3
         assert result.content == '{"articles": []}'
@@ -476,9 +470,7 @@ class TestRetryLogic:
             raise httpx.ConnectError("LLM unavailable")
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
-            with patch(
-                "httpx.AsyncClient.post", new=AsyncMock(side_effect=always_fail)
-            ):
+            with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=always_fail)):
                 with pytest.raises(httpx.ConnectError):
                     asyncio.run(_call_llm_api([{"role": "user", "content": "test"}]))
 
@@ -494,15 +486,11 @@ class TestRetryLogic:
             resp.status_code = 400
             resp.json.return_value = {"error": {"message": "bad request"}}
             resp.text = '{"error": {"message": "bad request"}}'
-            resp.raise_for_status.side_effect = httpx.HTTPStatusError(
-                "Bad Request", request=MagicMock(), response=resp
-            )
+            resp.raise_for_status.side_effect = httpx.HTTPStatusError("Bad Request", request=MagicMock(), response=resp)
             return resp
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
-            with patch(
-                "httpx.AsyncClient.post", new=AsyncMock(side_effect=always_400)
-            ):
+            with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=always_400)):
                 with pytest.raises(httpx.HTTPStatusError):
                     asyncio.run(_call_llm_api([{"role": "user", "content": "test"}]))
 
@@ -515,9 +503,7 @@ class TestRetryLogic:
             raise httpx.ConnectError("LLM unavailable")
 
         with patch("asyncio.sleep", new=AsyncMock(return_value=None)):
-            with patch(
-                "httpx.AsyncClient.post", new=AsyncMock(side_effect=always_fail)
-            ):
+            with patch("httpx.AsyncClient.post", new=AsyncMock(side_effect=always_fail)):
                 result = asyncio.run(
                     _extract_articles_with_llm(
                         "# Test\n[Article](https://example.com)",
