@@ -1,5 +1,5 @@
 # Changes here will be overwritten by Copier; used by `copier update`.
-_commit: v0.1.0-4-g5bb7175
+_commit: v0.1.0-3-g9aa2298
 _src_path: C:/redberry/src/python/redberry-webapp-template
 app_name: News Scraper
 app_slug: news_scraper
