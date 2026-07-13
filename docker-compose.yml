@@ -4,7 +4,7 @@ services:
     container_name: news-scraper
     restart: unless-stopped
     ports:
-      - "${BIND_HOST:-127.0.0.1}:${PORT:-8088}:${PORT:-8088}"   # BIND_HOST=0.0.0.0 per LAN / reverse proxy / esposizione diretta
+      - "${HOST:-127.0.0.1}:${PORT:-8088}:${PORT:-8088}"   # HOST=0.0.0.0 per LAN / reverse proxy / esposizione diretta
     environment:
       - PYTHONUNBUFFERED=1
       - PORT=${PORT:-8088}
@@ -15,7 +15,7 @@ services:
       # ConfigManager usa per scrivere — vedi CLAUDE.md "Config hot reload".
       - ENV_FILE=/app/hostcfg/.env
       # Persiste app.storage.user di NiceGUI (tema dark/light, ecc.) in ./data,
-      # già bind-mountato — altrimenti la cartella .nicegui/ di default viene
+      # già bind-montato — altrimenti la cartella .nicegui/ di default viene
       # persa a ogni ricreazione del container e il tema torna al default.
       - NICEGUI_STORAGE_PATH=/app/data/.nicegui
     # Playwright ha bisogno di /dev/shm abbastanza grande

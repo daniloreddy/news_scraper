@@ -6,14 +6,11 @@ from collections.abc import Callable
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import Request
-from fastapi.responses import RedirectResponse
 from nicegui import app as ng_app
 from nicegui import ui
 
 from .. import metrics as mdb
 from ..config import config
-from .router import auth
 
 logger = logging.getLogger(__name__)
 
@@ -22,10 +19,6 @@ _NAV_ITEMS: list[tuple[str, str, str]] = [
     ("Dashboard", "dashboard", "/"),
     ("Configurazione", "settings", "/config"),
 ]
-
-
-def _check_auth(request: Request) -> bool:
-    return auth.verify_token(request.cookies.get(auth.cookie_name, ""))
 
 
 def _get_tz() -> ZoneInfo:
@@ -98,10 +91,7 @@ def _footer() -> None:
 
 
 @ui.page("/")
-async def dashboard_page(request: Request) -> RedirectResponse | None:
-    if not _check_auth(request):
-        return RedirectResponse("/login")
-
+async def dashboard_page() -> None:
     dark = _page_setup("Dashboard")
     _header(
         "Dashboard",
@@ -209,14 +199,10 @@ async def dashboard_page(request: Request) -> RedirectResponse | None:
             refresh_label.set_text("auto-refresh disabilitato")
 
     _footer()
-    return None
 
 
 @ui.page("/config")
-async def config_page(request: Request) -> RedirectResponse | None:
-    if not _check_auth(request):
-        return RedirectResponse("/login")
-
+async def config_page() -> None:
     dark = _page_setup("Configurazione")
     _header(
         "Configurazione",
@@ -365,4 +351,3 @@ async def config_page(request: Request) -> RedirectResponse | None:
         ui.button("Salva", icon="save", on_click=save).props("color=primary").classes("q-mt-sm")
 
     _footer()
-    return None

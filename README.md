@@ -56,9 +56,9 @@ curl -O https://raw.githubusercontent.com/daniloreddy/news_scraper/main/docker-c
 # Host port the service listens on (change if 8088 is already taken)
 PORT=8088
 # Address Docker publishes the port on. Default 127.0.0.1 = reachable only from
-# this machine (e.g. behind a local Cloudflare Tunnel). Set BIND_HOST=0.0.0.0
+# this machine (e.g. behind a local Cloudflare Tunnel). Set HOST=0.0.0.0
 # to expose on LAN / behind a reverse proxy on another host / directly on the internet.
-#BIND_HOST=127.0.0.1
+#HOST=127.0.0.1
 LLM_BASE_URL=https://api.openai.com/v1
 LLM_API_KEY=your-api-key-here
 LLM_MODEL=gpt-4o-mini
@@ -90,8 +90,8 @@ docker exec -it news-scraper python scripts/set_password.py
 The service will be available at `http://localhost:8088` (or whatever `PORT` you set).
 The monitoring dashboard is at `http://localhost:8088/ui/`.
 
-> By default the port is only reachable from this machine (`BIND_HOST=127.0.0.1`). If you
-> were relying on the old default of exposing it on all interfaces, set `BIND_HOST=0.0.0.0`
+> By default the port is only reachable from this machine (`HOST=127.0.0.1`). If you
+> were relying on the old default of exposing it on all interfaces, set `HOST=0.0.0.0`
 > in `.env` explicitly.
 
 **Update image**

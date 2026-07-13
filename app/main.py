@@ -4,56 +4,46 @@ Invocabile da n8n via HTTP POST /scrape
 Dashboard di monitoraggio su /ui/
 """
 
-import argparse
-import asyncio
-import ipaddress
-import logging
-import os
-import secrets
-import subprocess
-import sys
-import threading
-import time
-from collections.abc import AsyncIterator, Callable, Coroutine
-from contextlib import asynccontextmanager
-from typing import Any
-from urllib.parse import urlparse
+from __future__ import annotations
 
-import uvicorn
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
-from fastapi.responses import RedirectResponse
-from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
-from fastapi.staticfiles import StaticFiles
-from nicegui import ui
-from pydantic import BaseModel, Field, field_validator
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
-from starlette.middleware.base import RequestResponseEndpoint
+from redberry_webkit.env_resolver import resolve_env_path
 
-# Stage 1 — lightweight parse at import time, before any other env var is read.
-# Required because uvicorn re-imports app.main on every reload-worker import,
-# so .env must be (re)loaded on every import, not only inside __main__.
-_env_parser = argparse.ArgumentParser(add_help=False)
-_env_parser.add_argument("--env-file", type=str, default=None)
-_env_args, _ = _env_parser.parse_known_args()
-load_dotenv(_env_args.env_file)
+_env_path = resolve_env_path()
+load_dotenv(_env_path)
 
-# Fix per Windows: Playwright richiede ProactorEventLoop per gestire i sottoprocessi
-if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+import argparse  # noqa: E402
+import asyncio  # noqa: E402
+import ipaddress  # noqa: E402
+import logging  # noqa: E402
+import os  # noqa: E402
+import secrets  # noqa: E402
+import subprocess  # noqa: E402
+import sys  # noqa: E402
+import threading  # noqa: E402
+import time  # noqa: E402
+from collections.abc import AsyncIterator, Callable, Coroutine  # noqa: E402
+from contextlib import asynccontextmanager  # noqa: E402
+from logging.handlers import RotatingFileHandler  # noqa: E402
+from pathlib import Path  # noqa: E402
+from typing import Any  # noqa: E402
+from urllib.parse import urlparse  # noqa: E402
 
-# Must run before any app-internal import below: importing .config triggers
-# ConfigManager()'s singleton __new__ as a side effect, which logs at INFO/WARNING
-# level — without basicConfig() first, the root logger has no level/handler yet
-# and those messages are silently dropped (observed in production: the "using
-# .env=..." startup log never appeared, even though the config was loading fine).
-logging.basicConfig(level=logging.INFO)
-
+import uvicorn  # noqa: E402
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, status  # noqa: E402
+from fastapi.responses import RedirectResponse  # noqa: E402
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer  # noqa: E402
+from fastapi.staticfiles import StaticFiles  # noqa: E402
+from nicegui import ui  # noqa: E402
+from pydantic import BaseModel, Field, field_validator  # noqa: E402
 from redberry_webkit.auth import client_ip, purge_loop  # noqa: E402
+from slowapi import Limiter, _rate_limit_exceeded_handler  # noqa: E402
+from slowapi.errors import RateLimitExceeded  # noqa: E402
+from slowapi.middleware import SlowAPIMiddleware  # noqa: E402
+from starlette.middleware.base import RequestResponseEndpoint  # noqa: E402
 
 from . import metrics  # noqa: E402
-from .config import config  # noqa: E402 — must follow stage-1 load_dotenv() above
+from .config import config  # noqa: E402
 from .logging_filters import CredentialFilter  # noqa: E402
 from .metrics import RequestRecord  # noqa: E402
 from .scraper import ScrapeResult, scrape_article, scrape_latest_news  # noqa: E402
@@ -61,11 +51,31 @@ from .ui.router import TRUSTED_PROXIES  # noqa: E402
 from .ui.router import auth as ui_auth  # noqa: E402
 from .ui.router import router as ui_router  # noqa: E402
 
-for _handler in logging.getLogger().handlers:
-    _handler.addFilter(CredentialFilter())
-logger = logging.getLogger(__name__)
+# Fix per Windows: Playwright richiede ProactorEventLoop per gestire i sottoprocessi
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = PROJECT_ROOT / "data"
+LOG_DIR = DATA_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 DEV = os.getenv("DEV", "false").lower() in ("true", "1", "yes")
+CONFIG_RELOAD_INTERVAL_S = 5
+
+_stream_handler = logging.StreamHandler()
+_file_handler = RotatingFileHandler(LOG_DIR / "app.log", maxBytes=5_000_000, backupCount=3, encoding="utf-8")
+_credential_filter = CredentialFilter()
+_stream_handler.addFilter(_credential_filter)
+_file_handler.addFilter(_credential_filter)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    handlers=[_stream_handler, _file_handler],
+)
+logger = logging.getLogger(__name__)
+logger.info("Using .env=%s", _env_path)
 
 security = HTTPBearer(auto_error=False)
 
@@ -127,21 +137,38 @@ async def _purge_old_metrics_periodically() -> None:
             logger.exception("Purge periodica delle metriche fallita")
 
 
-async def _reload_config_periodically() -> None:
+async def _config_reload_loop(interval_s: int) -> None:
     while True:
-        await asyncio.sleep(5)
+        await asyncio.sleep(interval_s)
         try:
             config.reload_if_stale()
         except Exception:
             logger.exception("Reload periodico della configurazione fallito")
 
 
+def _crash_on_task_error(task: asyncio.Task[None]) -> None:
+    # A background loop task (purge_loop, metrics purge, config reload) is only ever
+    # supposed to end via .cancel() at shutdown. If it dies from an unhandled exception
+    # instead, asyncio would otherwise just log "Task exception was never retrieved" and
+    # keep the process alive with silently broken rate-limit purging / config hot-reload
+    # — worse than crashing.
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.critical("Background task %s died unexpectedly, exiting", task.get_name(), exc_info=exc)
+        os._exit(1)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await metrics.init_db()
     purge_task = asyncio.create_task(purge_loop(ui_auth))
+    purge_task.add_done_callback(_crash_on_task_error)
     metrics_purge_task = asyncio.create_task(_purge_old_metrics_periodically())
-    config_reload_task = asyncio.create_task(_reload_config_periodically())
+    metrics_purge_task.add_done_callback(_crash_on_task_error)
+    config_task = asyncio.create_task(_config_reload_loop(CONFIG_RELOAD_INTERVAL_S))
+    config_task.add_done_callback(_crash_on_task_error)
 
     try:
         logger.info("Verifica/Installazione automatica di Playwright Chromium...")
@@ -157,7 +184,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
     purge_task.cancel()
     metrics_purge_task.cancel()
-    config_reload_task.cancel()
+    config_task.cancel()
 
 
 app = FastAPI(
@@ -170,7 +197,9 @@ app = FastAPI(
     openapi_url="/openapi.json" if DEV else None,
 )
 app.state.limiter = limiter
+# slowapi lacks precise stubs for this handler signature, hence the ignore below.
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)  # type: ignore[arg-type]
+app.add_middleware(SlowAPIMiddleware)
 
 
 _UI_PREFIX = "/ui"
@@ -196,6 +225,17 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 # --- UI login/logout router ---
 app.include_router(ui_router)
+
+
+@app.get("/health")
+@limiter.limit("100/minute")
+async def health(request: Request) -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/")
+async def root() -> RedirectResponse:
+    return RedirectResponse(url="/ui/")
 
 
 # --- Pydantic models ---
@@ -229,12 +269,6 @@ class ArticleRequest(BaseModel):
 
 
 # --- Scraping endpoints ---
-
-
-@app.get("/health")
-@limiter.limit("100/minute")
-async def health(request: Request) -> dict[str, str]:
-    return {"status": "ok"}
 
 
 def _run_scrape_sync(
@@ -362,5 +396,6 @@ if __name__ == "__main__":
         host=args.host,
         port=args.port,
         reload=args.dev,
+        reload_dirs=[str(PROJECT_ROOT / "app"), str(PROJECT_ROOT / "static")] if args.dev else None,
         loop="asyncio",
     )

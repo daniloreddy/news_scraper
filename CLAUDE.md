@@ -21,11 +21,13 @@ Runs `python -m app.main --dev`, which starts uvicorn with `--reload` on `PORT` 
 venv\Scripts\python -m app.main --dev --port 8088
 venv\Scripts\python -m app.main --dev --env-file .env.staging   # custom env file
 ```
-`app/main.py` has a two-stage argparse: a stage-1 parser (module import time) loads `--env-file` (default: nearest `.env`) before any other env var is read, and a stage-2 parser (`if __name__ == "__main__":`) resolves `--port`/`--host`/`--dev` with precedence CLI flag > env var (`PORT`/`HOST`/`DEV`) > hardcoded default, then calls `uvicorn.run(..., loop="asyncio")` — `loop="asyncio"` is required to preserve the `WindowsProactorEventLoopPolicy` set for Playwright; do not change it.
+`app/main.py` resolves the `.env` path once at the very top of the module (before any other project import) via `redberry_webkit.env_resolver.resolve_env_path()` — precedence `ENV_FILE` (Docker) > `--env-file` CLI flag > nearest `.env` found upward from cwd — then a second parser (`if __name__ == "__main__":`) resolves `--port`/`--host`/`--dev` with precedence CLI flag > env var (`PORT`/`HOST`/`DEV`) > hardcoded default, then calls `uvicorn.run(..., loop="asyncio")` — `loop="asyncio"` is required to preserve the `WindowsProactorEventLoopPolicy` set for Playwright; do not change it.
 
-Invoking `uvicorn app.main:app --reload --port 8088 --loop asyncio` directly (bypassing `python -m app.main`) still works — the stage-1 parser tolerates unrecognized argv — but only the `python -m app.main` form honors `--env-file`/`--dev`/`--host` overrides.
+`AuthManager.verify_password()` (redberry-webkit ≥v0.2.0, scrypt N=131072) è sincrona e costa ~150-250ms/~128MB per chiamata — in `app/ui/router.py` va sempre invocata via `asyncio.to_thread(...)`, mai inline nell'handler async `/auth/login` (bloccherebbe l'event loop). Pattern già cablato — mantenerlo in ogni personalizzazione del login flow.
 
-`app/config.py`'s `ConfigManager` resolves `--env-file` independently (own lightweight argv parse, same default-to-nearest-`.env` fallback) so it agrees with `main.py` on which file to read regardless of import order — this is also the file it polls for hot-reload and writes to via the UI config editor.
+Invoking `uvicorn app.main:app --reload --port 8088 --loop asyncio` directly (bypassing `python -m app.main`) still works — `resolve_env_path()` reads `ENV_FILE` or falls back to nearest-`.env` regardless of how the process was started — but only the `python -m app.main` form honors `--env-file`/`--dev`/`--host` CLI overrides.
+
+`app/config.py`'s `ConfigManager` resolves its own `.env` path independently (same `resolve_env_path()`) so it agrees with `main.py` on which file to read regardless of import order — this is also the file it polls for hot-reload and writes to via the UI config editor.
 
 **Install deps (dev deps needed for quality checks):**
 ```
@@ -67,10 +69,8 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 - `app/scraper.py` — Scraping logic. Playwright → BeautifulSoup → MarkItDown → LLM. Browser/page launch shared via `_new_browser_page()`; HTML→Markdown conversion in-memory via `_html_to_markdown()` (`markitdown.convert_stream`, no temp files).
 - `app/config.py` — ConfigManager singleton. `.env` is the single source of truth (defaults + `.env` only, no OS env override, no separate JSON override file); resolves its own `--env-file` path (mirrors `main.py`'s stage-1 parser) and hot-reloads by polling the file's mtime.
 - `app/metrics.py` — MetricsDB. SQLite via aiosqlite. Records each request with token counts; `purge_old()` prunes records past `METRICS_RETENTION_DAYS`.
-- `app/net.py` — Shared client-IP resolution (`resolve_client_ip()`, `trusted_proxies()`), used by both `main.py` (rate limiting) and `ui/auth.py` (login rate limiting).
-- `app/ui/auth.py` — AuthManager for dashboard (scrypt password, JWT cookie).
-- `app/ui/router.py` — FastAPI routes: `/login`, `/auth/login`, `/auth/logout`.
-- `app/ui/pages.py` — NiceGUI pages: dashboard (`/ui/`), config editor (`/ui/config`).
+- `app/ui/router.py` — FastAPI routes: `/login`, `/auth/login`, `/auth/logout`; instantiates `AuthManager` (scrypt password, JWT cookie) from `redberry_webkit.auth`; client-IP resolution (`client_ip()`, `TRUSTED_PROXIES`) also comes from `redberry_webkit.auth`, reused by `main.py` for rate limiting.
+- `app/ui/pages.py` — NiceGUI pages: dashboard (`/ui/`), config editor (`/ui/config`). No auth check inside the page handlers themselves — `_auth_gate` in `main.py` already gates everything under `/ui`.
 
 **Scrape flow (`/scrape`):**
 1. Playwright renders full JS page → raw HTML
@@ -106,6 +106,8 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 - **NiceGUI import order:** `from .ui import pages as _ui_pages` must be imported BEFORE `ui.run_with(app)` and must NOT use `import app.ui.pages` (absolute import shadows the `app = FastAPI(...)` variable).
 - **NiceGUI navigation paths:** `ui.navigate.to()` prepends the mount path `/ui` automatically. Use paths relative to the NiceGUI root (e.g. `/config` not `/ui/config`). To navigate to FastAPI routes use `ui.run_javascript("window.location.href='/route'")`.
 - **NiceGUI dark mode persistence:** Use `from nicegui import app as ng_app` and `ng_app.storage.user` — never `ui.dark_mode(True)` hardcoded (resets theme on every page load). `ui.storage` does not exist. Note this only persists the *value* correctly if `NICEGUI_STORAGE_PATH` itself survives a container recreate — see the Docker note below.
+- **Auth gate scope:** `_auth_gate` middleware (`app/main.py`) only intercepts `_UI_PREFIX` (`/ui`) and its subpaths — `/health`, `/`, `/scrape*` fall through unconditionally and are public by simply being outside `/ui`, no separate allowlist needed. `_LOGIN_PATHS`/`_UI_BYPASS_PREFIXES` are the canonical constant names shared across all redberry-webapp-template-derived projects.
+- **Background task crash policy:** `purge_task`/`metrics_purge_task`/`config_task` in `main.py`'s `lifespan` have `add_done_callback(_crash_on_task_error)` — an unhandled exception crashes the process (`os._exit(1)`) instead of dying silently and leaving rate-limit purging / metrics purging / config hot-reload broken.
 - **NiceGUI storage path in Docker:** `app.storage.user` (dark mode, etc.) is written to disk at `NICEGUI_STORAGE_PATH` (default `.nicegui/`, relative to cwd — a NiceGUI-internal setting, unrelated to `ConfigManager`). In Docker this defaults to an ephemeral path inside the container filesystem, wiped on every `docker compose up`/container recreate — set `NICEGUI_STORAGE_PATH=/app/data/.nicegui` (both compose files already do) so it lands under the bind-mounted `./data`, or the theme (and any other per-user UI state) silently resets to default on every restart.
 
 ## Runtime data (gitignored)
@@ -119,8 +121,7 @@ FastAPI microservice with scraping API + NiceGUI monitoring dashboard:
 
 See `.env.example`. Key vars:
 - `PORT` — host listen port (default 8088). Used by `docker-compose*.yml` (`${PORT:-8088}` in the `ports:` mapping and Dockerfile `CMD`) and, for local dev, as the `--port` default in `app/main.py`'s `__main__` block (only when run via `python -m app.main`; `--port` CLI flag overrides it). Restart/re-`up` required to change.
-- `HOST` — bare-metal-only bind address for local dev (default `127.0.0.1`, safe-by-default: reachable only from this machine). `--host` CLI flag overrides it. Set to `0.0.0.0` to expose on LAN. Not read in Docker (the container's `CMD` always hardcodes `--host 0.0.0.0` for Docker-networking reasons — see `BIND_HOST` below for the Docker-side exposure decision). Restart required.
-- `BIND_HOST` — Docker-only: the address `docker-compose.yml`'s `ports:` mapping publishes on (default `127.0.0.1`, safe-by-default). Set to `0.0.0.0` to expose on LAN / behind a reverse proxy on another host / directly on the internet. Not used by `docker-compose-dev.yml` (intentionally open on all interfaces for local manual testing). Requires `docker compose up` to re-apply.
+- `HOST` — dual-purpose, per @rules/uvicorn.md §2 / @rules/docker.md §5. Bare-metal: bind address for local dev (default `127.0.0.1`, safe-by-default, reachable only from this machine), `--host` CLI flag overrides it; not read inside the container (the Docker `CMD` always hardcodes `--host 0.0.0.0` — a Docker-networking necessity, unrelated to exposure). Docker: the address `docker-compose.yml`'s `ports:` mapping publishes on (same default `127.0.0.1`); set to `0.0.0.0` to expose on LAN / behind a reverse proxy on another host / directly on the internet. Not used by `docker-compose-dev.yml` (intentionally open on all interfaces for local manual testing). Restart / `docker compose up` required to re-apply.
 - `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TEMPERATURE`, `LLM_TIMEOUT`
 - `LLM_MAX_PROMPT_CHARS` — truncates markdown sent to LLM (default 8000 chars ≈ 2700 tokens)
 - `API_AUTH_TOKEN` — if set, all `/scrape*` endpoints require `Authorization: Bearer <token>`
