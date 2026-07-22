@@ -14,4 +14,4 @@ nicegui==3.14.0
 aiosqlite==0.22.1
 python-multipart==0.0.32
 tzdata==2026.2
-redberry-webkit @ git+https://github.com/daniloreddy/redberry-webkit.git@v0.2.0
+redberry-webkit @ git+https://github.com/daniloreddy/redberry-webkit.git@v0.2.1
