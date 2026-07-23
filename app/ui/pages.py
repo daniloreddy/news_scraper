@@ -2,6 +2,7 @@
 
 import datetime
 import logging
+import re
 from collections.abc import Callable
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -13,6 +14,8 @@ from .. import metrics as mdb
 from ..config import config
 
 logger = logging.getLogger(__name__)
+
+_RATE_LIMIT_RE = re.compile(r"^\d+/(second|minute|hour|day)$")
 
 _APP_NAME: str = "News Scraper"
 _NAV_ITEMS: list[tuple[str, str, str]] = [
@@ -322,6 +325,10 @@ async def config_page() -> None:
             )
 
         async def save() -> None:
+            rate_limit = inp_rate_limit.value.strip()
+            if rate_limit and not _RATE_LIMIT_RE.match(rate_limit):
+                ui.notify("Rate limit non valido (formato atteso: 20/minute)", type="negative", position="top")
+                return
             try:
                 config.update_many(
                     {
@@ -336,7 +343,7 @@ async def config_page() -> None:
                         "REFRESH_ENABLED": "true" if refresh_switch.value else "false",
                         "REFRESH_INTERVAL": inp_refresh.value,
                         "TZ": inp_timezone.value,
-                        "RATE_LIMIT": inp_rate_limit.value,
+                        "RATE_LIMIT": rate_limit,
                         "API_AUTH_TOKEN": inp_auth_token.value,
                         "METRICS_RETENTION_DAYS": inp_retention.value,
                     }

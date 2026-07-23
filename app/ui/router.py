@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 from pathlib import Path
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from redberry_webkit.auth import AuthManager, client_ip, is_secure_context
+
+logger = logging.getLogger(__name__)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 STATIC_DIR = PROJECT_ROOT / "static"
@@ -36,10 +39,13 @@ async def auth_login(request: Request, password: str = Form(...)) -> RedirectRes
 
     if not auth.has_password():
         return RedirectResponse(url="/login?error=nopassword", status_code=303)
-    if auth.is_global_limited():
-        return RedirectResponse(url="/login?error=limited", status_code=303)
     if auth.is_ip_blocked(ip):
         return RedirectResponse(url="/login?error=blocked", status_code=303)
+    if auth.is_global_limited():
+        # Cross-IP attempt volume is logged, never used to block: a hard global lockout
+        # lets one attacker (real or spoofed IPs) lock out every legitimate admin login
+        # (REPORT.md SEC-02). Per-IP blocking above is the actual defense.
+        logger.warning("elevated login attempt volume across IPs; latest attempt from ip=%s", ip)
 
     # scrypt at redberry_webkit's current cost (N=131072) takes ~150-250ms and allocates
     # ~128MB — running it inline would block the event loop for that whole window on
