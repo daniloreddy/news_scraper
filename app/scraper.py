@@ -4,6 +4,7 @@ Logica di scraping con Playwright.
 - scrape_article: apre un articolo, estrae titolo, data, testo pulito
 """
 
+import asyncio
 import io
 import json
 import logging
@@ -24,6 +25,7 @@ from pydantic import Field as PydanticField
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
 
 from .config import config
+from .url_safety import validate_url
 
 logger = logging.getLogger(__name__)
 
@@ -254,6 +256,10 @@ async def scrape_latest_news(url: str, max_articles: int = 1) -> ScrapeResult:
     async with _new_browser_page() as page:
         logger.info("Apertura homepage: %s", url)
         await page.goto(url, wait_until="networkidle", timeout=30000)
+        # Revalidate post-navigation: page.goto() follows 3xx redirects automatically,
+        # and the initial URL check (done by the caller / pydantic validator) doesn't
+        # see where a redirect actually lands (SSRF guard, see url_safety.py).
+        await asyncio.to_thread(validate_url, page.url)
 
         html_content = await page.content()
         _save_debug_file("playwright_output.html", html_content)
@@ -307,8 +313,14 @@ async def scrape_article(url: str) -> ScrapeResult:
 
 async def _scrape_article_page(page: Page, url: str) -> dict[str, Any]:
     """Apre un articolo ed estrae il contenuto pulito via MarkItDown."""
+    # Article URLs reaching here can come straight from LLM extraction
+    # (scrape_latest_news), which never passed through the pydantic request
+    # validator -- validate here too, not just at the API boundary.
+    await asyncio.to_thread(validate_url, url)
     logger.info("Scraping articolo: %s", url)
     await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    # Revalidate post-navigation: see the matching comment in scrape_latest_news.
+    await asyncio.to_thread(validate_url, page.url)
 
     html_content = await page.content()
     markdown_text = _html_to_markdown(html_content)

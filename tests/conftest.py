@@ -23,15 +23,22 @@ def client(tmp_path):
     # data/metrics.db shown on the production dashboard.
     test_db_path = tmp_path / "metrics.db"
 
-    # Prevent lifespan from actually running `playwright install`.
-    # Patch API_AUTH_TOKEN to "" so local .env values don't bleed into
-    # non-auth tests; auth-specific tests patch it themselves per test.
-    with patch("subprocess.run"):
-        with patch.dict(config._cache, {"API_AUTH_TOKEN": ""}):
-            with patch.object(metrics, "_DB_PATH", test_db_path):
-                # client=("127.0.0.1", ...) simulates the documented default
-                # deployment (reverse proxy / Cloudflare Tunnel on localhost)
-                # so forwarded-IP headers set by tests are trusted, per
-                # TRUSTED_PROXIES default.
-                with TestClient(app, client=("127.0.0.1", 123)) as c:
-                    yield c
+    # url_safety.validate_url() resolves non-literal-IP hostnames via real DNS
+    # (SSRF guard, see app/url_safety.py) — tests use "https://example.com" etc.
+    # as stand-in URLs, so fake the resolution to a public IP instead of hitting
+    # real DNS (flaky/slow in CI, unavailable in sandboxed environments). Tests
+    # for the SSRF guard itself (private/loopback literal IPs, "localhost",
+    # "file://") never reach this code path — they're rejected before DNS lookup.
+    with patch("app.url_safety.socket.getaddrinfo", return_value=[(None, None, None, "", ("93.184.216.34", 0))]):
+        # Prevent lifespan from actually running `playwright install`.
+        # Patch API_AUTH_TOKEN to "" so local .env values don't bleed into
+        # non-auth tests; auth-specific tests patch it themselves per test.
+        with patch("subprocess.run"):
+            with patch.dict(config._cache, {"API_AUTH_TOKEN": ""}):
+                with patch.object(metrics, "_DB_PATH", test_db_path):
+                    # client=("127.0.0.1", ...) simulates the documented default
+                    # deployment (reverse proxy / Cloudflare Tunnel on localhost)
+                    # so forwarded-IP headers set by tests are trusted, per
+                    # TRUSTED_PROXIES default.
+                    with TestClient(app, client=("127.0.0.1", 123)) as c:
+                        yield c

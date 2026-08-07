@@ -1,6 +1,7 @@
 """Level 1 — pure unit tests: no HTTP, no mocked I/O."""
 
 import asyncio
+import socket
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10,8 +11,9 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import ValidationError
 
 from app.config import config
-from app.main import ArticleRequest, ScrapeRequest, _validate_url, verify_token
+from app.main import ArticleRequest, ScrapeRequest, verify_token
 from app.scraper import ArticlesList, _preprocess_html
+from app.url_safety import validate_url
 
 # ---------------------------------------------------------------------------
 # _preprocess_html
@@ -175,44 +177,77 @@ class TestArticlesListModel:
 
 
 # ---------------------------------------------------------------------------
-# _validate_url (SSRF guard)
+# validate_url (SSRF guard) -- app/url_safety.py
 # ---------------------------------------------------------------------------
+
+
+def _fake_addrinfo(*ips: str) -> list[tuple]:
+    """Builds a socket.getaddrinfo()-shaped return value for the given IPs."""
+    return [(None, None, None, "", (ip, 0)) for ip in ips]
 
 
 class TestValidateUrl:
     def test_https_url_allowed(self):
-        assert _validate_url("https://example.com/news") == "https://example.com/news"
+        with patch("app.url_safety.socket.getaddrinfo", return_value=_fake_addrinfo("93.184.216.34")):
+            assert validate_url("https://example.com/news") == "https://example.com/news"
 
     def test_http_url_allowed(self):
-        assert _validate_url("http://example.com/news") == "http://example.com/news"
+        with patch("app.url_safety.socket.getaddrinfo", return_value=_fake_addrinfo("93.184.216.34")):
+            assert validate_url("http://example.com/news") == "http://example.com/news"
 
     def test_file_scheme_rejected(self):
         with pytest.raises(ValueError, match="http or https"):
-            _validate_url("file:///etc/passwd")
+            validate_url("file:///etc/passwd")
 
     def test_data_scheme_rejected(self):
         with pytest.raises(ValueError, match="http or https"):
-            _validate_url("data:text/html,<script>alert(1)</script>")
+            validate_url("data:text/html,<script>alert(1)</script>")
 
     def test_localhost_rejected(self):
         with pytest.raises(ValueError, match="not allowed"):
-            _validate_url("http://localhost/admin")
+            validate_url("http://localhost/admin")
 
     def test_loopback_ip_rejected(self):
         with pytest.raises(ValueError, match="not allowed"):
-            _validate_url("http://127.0.0.1/secret")
+            validate_url("http://127.0.0.1/secret")
 
     def test_private_class_c_rejected(self):
         with pytest.raises(ValueError, match="not allowed"):
-            _validate_url("http://192.168.1.100/")
+            validate_url("http://192.168.1.100/")
 
     def test_private_class_a_rejected(self):
         with pytest.raises(ValueError, match="not allowed"):
-            _validate_url("http://10.0.0.1/")
+            validate_url("http://10.0.0.1/")
 
     def test_empty_host_rejected(self):
         with pytest.raises(ValueError):
-            _validate_url("https:///path")
+            validate_url("https:///path")
+
+    def test_unspecified_host_rejected(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            validate_url("http://0.0.0.0/")
+
+    def test_zero_shorthand_host_rejected(self):
+        with pytest.raises(ValueError, match="not allowed"):
+            validate_url("http://0/")
+
+    def test_hostname_resolving_to_loopback_rejected(self):
+        # Simulates decimal/hex IP literals (e.g. "2130706433", "0x7f000001") and
+        # DNS-rebinding hostnames -- whatever the OS resolver returns is what gets
+        # validated, not just what ipaddress.ip_address() can parse directly.
+        with patch("app.url_safety.socket.getaddrinfo", return_value=_fake_addrinfo("127.0.0.1")):
+            with pytest.raises(ValueError, match="disallowed address"):
+                validate_url("http://2130706433/")
+
+    def test_hostname_resolving_to_private_rejected(self):
+        with patch("app.url_safety.socket.getaddrinfo", return_value=_fake_addrinfo("10.1.2.3")):
+            with pytest.raises(ValueError, match="disallowed address"):
+                validate_url("http://internal.example/")
+
+    def test_unresolvable_hostname_rejected(self):
+        with patch("app.url_safety.socket.getaddrinfo", side_effect=socket.gaierror("Name or service not known")):
+            with pytest.raises(ValueError, match="Cannot resolve"):
+                validate_url("http://this-does-not-exist.invalid/")
 
 
 # ---------------------------------------------------------------------------
@@ -348,10 +383,14 @@ class TestScrapeArticlePage:
     def _run(self, page, url="https://example.com"):
         from app.scraper import _scrape_article_page
 
-        return asyncio.run(_scrape_article_page(page, url))
+        # These tests exercise content truncation/title parsing, not the SSRF
+        # guard (already covered by TestValidateUrl) -- skip the real DNS lookup.
+        with patch("app.scraper.validate_url", side_effect=lambda v: v):
+            return asyncio.run(_scrape_article_page(page, url))
 
-    def _make_page(self, content: str, title: str = "Title", thumbnail=None):
+    def _make_page(self, content: str, title: str = "Title", thumbnail=None, url: str = "https://example.com"):
         page = AsyncMock()
+        page.url = url
         page.content.return_value = "<html><body>x</body></html>"
         page.title.return_value = title
         page.evaluate.return_value = thumbnail

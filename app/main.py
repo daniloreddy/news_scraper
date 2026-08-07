@@ -14,7 +14,6 @@ load_dotenv(_env_path)
 
 import argparse  # noqa: E402
 import asyncio  # noqa: E402
-import ipaddress  # noqa: E402
 import logging  # noqa: E402
 import os  # noqa: E402
 import secrets  # noqa: E402
@@ -27,7 +26,6 @@ from contextlib import asynccontextmanager  # noqa: E402
 from logging.handlers import RotatingFileHandler  # noqa: E402
 from pathlib import Path  # noqa: E402
 from typing import Any  # noqa: E402
-from urllib.parse import urlparse  # noqa: E402
 
 import uvicorn  # noqa: E402
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, status  # noqa: E402
@@ -50,6 +48,7 @@ from .scraper import ScrapeResult, scrape_article, scrape_latest_news  # noqa: E
 from .ui.router import TRUSTED_PROXIES  # noqa: E402
 from .ui.router import auth as ui_auth  # noqa: E402
 from .ui.router import router as ui_router  # noqa: E402
+from .url_safety import validate_url  # noqa: E402
 
 # Fix per Windows: Playwright richiede ProactorEventLoop per gestire i sottoprocessi
 if sys.platform == "win32":
@@ -106,26 +105,6 @@ def verify_token(
                 headers={"WWW-Authenticate": "Bearer"},
             )
     return credentials.credentials if credentials else None
-
-
-def _validate_url(v: str) -> str:
-    """Block non-http(s) schemes and private/loopback IP ranges (SSRF guard)."""
-    parsed = urlparse(v)
-    if parsed.scheme not in ("http", "https"):
-        raise ValueError("URL must use http or https scheme")
-    host = parsed.hostname or ""
-    if not host:
-        raise ValueError("URL must have a valid hostname")
-    if host.lower() in ("localhost", "0.0.0.0"):
-        raise ValueError("URL hostname not allowed")
-    try:
-        addr = ipaddress.ip_address(host)
-    except ValueError:
-        pass
-    else:
-        if addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_reserved:
-            raise ValueError("URL hostname not allowed")
-    return v
 
 
 async def _purge_old_metrics_periodically() -> None:
@@ -248,7 +227,7 @@ class ScrapeRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def url_must_be_safe(cls, v: str) -> str:
-        return _validate_url(v)
+        return validate_url(v)
 
 
 class ArticleResult(BaseModel):
@@ -265,7 +244,7 @@ class ArticleRequest(BaseModel):
     @field_validator("url")
     @classmethod
     def url_must_be_safe(cls, v: str) -> str:
-        return _validate_url(v)
+        return validate_url(v)
 
 
 # --- Scraping endpoints ---
