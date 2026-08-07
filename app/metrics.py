@@ -1,7 +1,7 @@
 """MetricsDB: async SQLite for request and LLM token tracking."""
 
-import asyncio
 import logging
+import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -12,7 +12,12 @@ import aiosqlite
 logger = logging.getLogger(__name__)
 
 _DB_PATH = Path("data/metrics.db")
-_lock = asyncio.Lock()
+# threading.Lock, not asyncio.Lock: each /scrape request runs in a worker thread
+# with its own fresh event loop (see main.py's _run_scrape_sync), so an asyncio.Lock
+# would bind to the first loop it's acquired on and raise "bound to a different
+# event loop" RuntimeError on the next request's loop. Same reasoning as
+# BROWSER_SEMAPHORE (threading.Semaphore) in main.py.
+_lock = threading.Lock()
 
 
 @dataclass
