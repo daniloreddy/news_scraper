@@ -52,7 +52,7 @@ async def init_db() -> None:
 
 
 async def record(rec: RequestRecord) -> None:
-    async with _lock:
+    with _lock:
         try:
             async with aiosqlite.connect(_DB_PATH) as db:
                 await db.execute(
@@ -109,7 +109,7 @@ async def purge_old(days: int) -> None:
     """Delete request records older than `days`, so metrics.db doesn't grow forever
     on a long-running instance. Call periodically from a background task."""
     cutoff = time.time() - days * 86400
-    async with _lock:
+    with _lock:
         try:
             async with aiosqlite.connect(_DB_PATH) as db:
                 await db.execute("DELETE FROM requests WHERE ts < ?", (cutoff,))
