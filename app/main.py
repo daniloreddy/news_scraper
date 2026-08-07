@@ -45,9 +45,9 @@ from .config import config  # noqa: E402
 from .logging_filters import CredentialFilter  # noqa: E402
 from .metrics import RequestRecord  # noqa: E402
 from .scraper import ScrapeResult, scrape_article, scrape_latest_news  # noqa: E402
-from .ui.router import TRUSTED_PROXIES  # noqa: E402
 from .ui.router import auth as ui_auth  # noqa: E402
 from .ui.router import router as ui_router  # noqa: E402
+from .ui.router import trusted_proxies  # noqa: E402
 from .url_safety import validate_url  # noqa: E402
 
 # Fix per Windows: Playwright richiede ProactorEventLoop per gestire i sottoprocessi
@@ -84,7 +84,7 @@ BROWSER_SEMAPHORE = threading.Semaphore(3)
 
 def _rate_limit_key(request: Request) -> str:
     host = request.client.host if request.client else "unknown"
-    return client_ip(request.headers, host, TRUSTED_PROXIES)
+    return client_ip(request.headers, host, trusted_proxies())
 
 
 limiter = Limiter(key_func=_rate_limit_key)
@@ -125,29 +125,48 @@ async def _config_reload_loop(interval_s: int) -> None:
             logger.exception("Reload periodico della configurazione fallito")
 
 
-def _crash_on_task_error(task: asyncio.Task[None]) -> None:
-    # A background loop task (purge_loop, metrics purge, config reload) is only ever
-    # supposed to end via .cancel() at shutdown. If it dies from an unhandled exception
-    # instead, asyncio would otherwise just log "Task exception was never retrieved" and
-    # keep the process alive with silently broken rate-limit purging / config hot-reload
-    # — worse than crashing.
-    if task.cancelled():
-        return
-    exc = task.exception()
-    if exc is not None:
-        logger.critical("Background task %s died unexpectedly, exiting", task.get_name(), exc_info=exc)
-        os._exit(1)
+_MAX_CONSECUTIVE_TASK_FAILURES = 5
+
+
+def _supervise_background_task(name: str, coro_factory: Callable[[], Coroutine[Any, Any, None]]) -> asyncio.Task[None]:
+    """Wraps a background loop task (purge_loop, metrics purge, config reload) so a
+    single transient unhandled exception (e.g. SQLite momentarily locked, a filesystem
+    hiccup) doesn't kill the whole process. Logs and restarts with exponential backoff;
+    only exits via os._exit(1) after _MAX_CONSECUTIVE_TASK_FAILURES *consecutive*
+    failures, since by then the task is very likely broken for good (not transient),
+    and running with it silently dead (no metrics/rate-limit purge, no config
+    hot-reload) is worse than restarting the process."""
+
+    async def _run() -> None:
+        consecutive_failures = 0
+        while True:
+            try:
+                await coro_factory()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                consecutive_failures += 1
+                logger.exception(
+                    "Background task %s failed (%d/%d consecutive failures)",
+                    name,
+                    consecutive_failures,
+                    _MAX_CONSECUTIVE_TASK_FAILURES,
+                )
+                if consecutive_failures >= _MAX_CONSECUTIVE_TASK_FAILURES:
+                    logger.critical("Background task %s failed %d times in a row, exiting", name, consecutive_failures)
+                    os._exit(1)
+                await asyncio.sleep(min(2**consecutive_failures, 60))
+
+    return asyncio.create_task(_run(), name=name)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await metrics.init_db()
-    purge_task = asyncio.create_task(purge_loop(ui_auth))
-    purge_task.add_done_callback(_crash_on_task_error)
-    metrics_purge_task = asyncio.create_task(_purge_old_metrics_periodically())
-    metrics_purge_task.add_done_callback(_crash_on_task_error)
-    config_task = asyncio.create_task(_config_reload_loop(CONFIG_RELOAD_INTERVAL_S))
-    config_task.add_done_callback(_crash_on_task_error)
+    purge_task = _supervise_background_task("purge_loop", lambda: purge_loop(ui_auth))
+    metrics_purge_task = _supervise_background_task("metrics_purge", _purge_old_metrics_periodically)
+    config_task = _supervise_background_task("config_reload", lambda: _config_reload_loop(CONFIG_RELOAD_INTERVAL_S))
 
     try:
         logger.info("Verifica/Installazione automatica di Playwright Chromium...")
